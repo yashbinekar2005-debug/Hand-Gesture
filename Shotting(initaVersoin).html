@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>AR Gesture Shooter [High Accuracy Build]</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; }
+        
+        /* LAYERS */
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
+        
+        /* HIDDEN VIDEO */
+        #input-video { display: none; }
+
+        /* UI ELEMENTS */
+        #score-display { 
+            position: absolute; top: 20px; left: 20px; 
+            color: #00ffff; font-size: 32px; font-weight: 800; 
+            text-shadow: 0 0 10px #00ffff; letter-spacing: 2px;
+        }
+        
+        #guide-text { 
+            position: absolute; bottom: 30px; width: 100%; text-align: center; 
+            color: rgba(255,255,255,0.8); font-size: 16px; font-weight: bold;
+            text-shadow: 0 0 2px black;
+        }
+
+        /* FLOATING VFX */
+        .hit-text {
+            position: absolute; font-weight: 900; font-size: 24px;
+            animation: floatUp 0.8s ease-out forwards;
+            pointer-events: none;
+        }
+        
+        @keyframes floatUp {
+            0% { transform: translateY(0) scale(1); opacity: 1; }
+            100% { transform: translateY(-80px) scale(1.5); opacity: 0; }
+        }
+
+        /* LOADING OVERLAY */
+        #loading-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #111; z-index: 999; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; color: white;
+        }
+        
+        .loader-ring {
+            width: 60px; height: 60px; border: 6px solid #333; 
+            border-top: 6px solid #00ffff; border-radius: 50%;
+            animation: spin 1s linear infinite; margin-bottom: 20px;
+        }
+        
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        #loading-status { font-family: monospace; color: #888; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <!-- LOADING SCREEN -->
+    <div id="loading-screen">
+        <div class="loader-ring"></div>
+        <h2>SYSTEM INITIALIZING</h2>
+        <div id="loading-status">Locking WASM Versions...</div>
+    </div>
+
+    <!-- UI LAYER -->
+    <div id="ui-layer">
+        <div id="score-display">SCORE: 0</div>
+        <div id="guide-text">👆 INDEX to AIM | 👍 THUMB to SHOOT</div>
+    </div>
+
+    <!-- HIDDEN INPUT -->
+    <video id="input-video" playsinline webkit-playsinline></video>
+    
+    <!-- RENDER CONTAINER -->
+    <div id="canvas-container"></div>
+
+    <!-- DEPENDENCIES -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://unpkg.com/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+    <script>
+        /** 
+         * CONFIGURATION - TUNED FOR ACCURACY
+         */
+        const CONFIG = {
+            AI_FPS_LIMIT: 20,       
+            MAGNET_RADIUS: 0.25,    // INCREASED: Larger snap area (was 0.12)
+            MAGNET_STRENGTH: 0.3,   // NEW: How fast it snaps to target (0.0 - 1.0)
+            SENSITIVITY: 1.4,       // NEW: Multiplier for hand movement (makes reaching corners easier)
+            SMOOTHING: 0.3,         // NEW: Lower = smoother/slower, Higher = twitchier
+            DISC_SPEED: 0.025,
+            SPAWN_RADIUS: 8,
+            TRIGGER_THRESHOLD: 0.06 
+        };
+
+        const STATE = {
+            score: 0,
+            isLoading: true,
+            hand: null,             
+            // We store current smoothed aim here
+            aimX: 0,
+            aimY: 0,
+            lastAITime: 0,
+            isTriggerDown: false,
+            triggerCooldown: false
+        };
+
+        // DOM Elements
+        const videoElement = document.getElementById('input-video');
+        const loader = document.getElementById('loading-screen');
+        const statusText = document.getElementById('loading-status');
+        const scoreEl = document.getElementById('score-display');
+
+        /**
+         * 1. THREE.JS SETUP
+         */
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.z = 5;
+
+        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); 
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(0, 10, 10);
+        scene.add(dirLight);
+
+        const videoTexture = new THREE.VideoTexture(videoElement);
+        scene.background = videoTexture;
+
+        /**
+         * 2. GAME OBJECTS
+         */
+        
+        // Laser Line
+        const laserGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1)]);
+        const laserMat = new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 3 });
+        const laserLine = new THREE.Line(laserGeo, laserMat);
+        scene.add(laserLine);
+
+        // Reticle (Crosshair) - Added inner dot for precision
+        const reticleGroup = new THREE.Group();
+        const ring = new THREE.Mesh(
+            new THREE.RingGeometry(0.04, 0.05, 32),
+            new THREE.MeshBasicMaterial({ color: 0x00ffff, side: THREE.DoubleSide, transparent: true, opacity: 0.8 })
+        );
+        const dot = new THREE.Mesh(
+            new THREE.CircleGeometry(0.01, 16),
+            new THREE.MeshBasicMaterial({ color: 0xffffff })
+        );
+        reticleGroup.add(ring);
+        reticleGroup.add(dot);
+        scene.add(reticleGroup);
+
+        // Enemies System
+        let enemies = [];
+        const enemyGeo = new THREE.CylinderGeometry(0.6, 0.6, 0.1, 24);
+        enemyGeo.rotateX(Math.PI/2);
+        const enemyMat = new THREE.MeshPhongMaterial({ color: 0xff0044, shininess: 100 });
+
+        function spawnEnemy() {
+            const disc = new THREE.Mesh(enemyGeo, enemyMat.clone());
+            const angle = Math.random() * Math.PI * 2;
+            disc.position.set(
+                Math.cos(angle) * CONFIG.SPAWN_RADIUS,
+                Math.sin(angle) * CONFIG.SPAWN_RADIUS * 0.7,
+                -8 
+            );
+            disc.lookAt(0,0,0);
+            scene.add(disc);
+            enemies.push(disc);
+        }
+
+        for(let i=0; i<4; i++) spawnEnemy();
+
+        /**
+         * 3. AUDIO & VFX
+         */
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        function playSound(type) {
+            if(audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if(type === 'shot') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(110, audioCtx.currentTime + 0.1);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+            } else { 
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(200, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.1);
+                gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+            }
+        }
+
+        function createFloatingText(text, x, y, color) {
+            const div = document.createElement('div');
+            div.className = 'hit-text';
+            div.innerText = text;
+            div.style.color = color;
+            
+            const px = (x + 1) / 2 * window.innerWidth;
+            const py = -(y - 1) / 2 * window.innerHeight;
+            
+            div.style.left = `${px}px`;
+            div.style.top = `${py}px`;
+            
+            document.getElementById('ui-layer').appendChild(div);
+            setTimeout(() => div.remove(), 800);
+        }
+
+        /**
+         * 4. MEDIAPIPE LOGIC
+         */
+        function onResults(results) {
+            if(STATE.isLoading && results.multiHandLandmarks) {
+                STATE.isLoading = false;
+                loader.style.display = 'none';
+            }
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const lm = results.multiHandLandmarks[0];
+                const indexTip = lm[8];
+                const thumbTip = lm[4];
+                const indexBase = lm[5]; 
+
+                // AIMING: Apply Sensitivity Multiplier
+                // This makes small hand movements cover more screen
+                let rawX = (1 - indexTip.x) * 2 - 1; 
+                let rawY = (1 - indexTip.y) * 2 - 1;
+                
+                rawX *= CONFIG.SENSITIVITY;
+                rawY *= CONFIG.SENSITIVITY;
+
+                STATE.hand = { x: rawX, y: rawY };
+
+                // TRIGGER
+                const dist = Math.sqrt(Math.pow(thumbTip.x - indexBase.x, 2) + Math.pow(thumbTip.y - indexBase.y, 2));
+
+                if (dist < CONFIG.TRIGGER_THRESHOLD) {
+                    if(!STATE.isTriggerDown && !STATE.triggerCooldown) {
+                        STATE.isTriggerDown = true;
+                        fireGun();
+                        STATE.triggerCooldown = true;
+                        setTimeout(() => STATE.triggerCooldown = false, 250);
+                    }
+                } else {
+                    STATE.isTriggerDown = false;
+                }
+            } else {
+                STATE.hand = null;
+            }
+        }
+
+        const hands = new Hands({locateFile: (file) => {
+            return `https://unpkg.com/@mediapipe/hands@0.4.1646424915/${file}`;
+        }});
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 0,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults(onResults);
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: 1280, height: 720, facingMode: 'user' } 
+                });
+                videoElement.srcObject = stream;
+                await videoElement.play();
+                statusText.innerText = "Camera Active. Downloading AI Model...";
+            } catch (e) {
+                statusText.innerText = "Error: Camera Access Denied";
+            }
+        }
+        startCamera();
+
+        /**
+         * 5. GAMEPLAY LOGIC (IMPROVED ACCURACY)
+         */
+
+        // Helper: Linear Interpolation
+        function lerp(start, end, amt) {
+            return (1 - amt) * start + amt * end;
+        }
+
+        function updateReticleAndLaser() {
+            if (!STATE.hand) {
+                laserLine.visible = false;
+                reticleGroup.visible = false;
+                return;
+            }
+
+            laserLine.visible = true;
+            reticleGroup.visible = true;
+
+            // 1. SMOOTHING: Move current aim towards hand position
+            STATE.aimX = lerp(STATE.aimX, STATE.hand.x, CONFIG.SMOOTHING);
+            STATE.aimY = lerp(STATE.aimY, STATE.hand.y, CONFIG.SMOOTHING);
+
+            let renderX = STATE.aimX;
+            let renderY = STATE.aimY;
+            let isLocked = false;
+
+            // 2. MAGNETISM: Check closest enemy
+            let closestDist = CONFIG.MAGNET_RADIUS;
+            let snapTarget = null;
+
+            enemies.forEach(enemy => {
+                const p = enemy.position.clone().project(camera);
+                const d = Math.sqrt(Math.pow(p.x - renderX, 2) + Math.pow(p.y - renderY, 2));
+
+                if (d < closestDist) {
+                    closestDist = d;
+                    snapTarget = p;
+                }
+            });
+
+            // 3. APPLY SNAP
+            if (snapTarget) {
+                // If within radius, pull the aim aggressively towards target center
+                renderX = lerp(renderX, snapTarget.x, CONFIG.MAGNET_STRENGTH);
+                renderY = lerp(renderY, snapTarget.y, CONFIG.MAGNET_STRENGTH);
+                
+                // Visual feedback
+                ring.material.color.setHex(0xff0000); // Red
+                dot.material.color.setHex(0xff0000);
+                ring.scale.set(0.8, 0.8, 0.8); // Tighten crosshair
+                isLocked = true;
+            } else {
+                ring.material.color.setHex(0x00ffff); // Cyan
+                dot.material.color.setHex(0xffffff);
+                ring.scale.set(1, 1, 1);
+            }
+
+            // Save the *rendered* aim (with magnetism applied) for shooting
+            STATE.finalAimVector = new THREE.Vector2(renderX, renderY);
+
+            // 4. UPDATE VISUALS
+            
+            // Reticle Position
+            const vector = new THREE.Vector3(renderX, renderY, 0.5).unproject(camera);
+            const dir = vector.sub(camera.position).normalize();
+            const distance = 10;
+            const targetPos = camera.position.clone().add(dir.multiplyScalar(distance));
+            
+            reticleGroup.position.copy(targetPos);
+            reticleGroup.lookAt(camera.position);
+
+            // Laser Position
+            // We lock the laser origin to a fixed "Gun" point at bottom-right
+            // This creates a stable aiming feel
+            const gunPos = new THREE.Vector3(0.6, -0.6, 2).unproject(camera); 
+            
+            const positions = laserLine.geometry.attributes.position.array;
+            positions[0] = gunPos.x; positions[1] = gunPos.y; positions[2] = gunPos.z;
+            positions[3] = targetPos.x; positions[4] = targetPos.y; positions[5] = targetPos.z;
+            laserLine.geometry.attributes.position.needsUpdate = true;
+        }
+
+        function fireGun() {
+            if(!STATE.finalAimVector) return;
+
+            playSound('shot');
+
+            // Raycast using the MAGNETIZED vector
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(STATE.finalAimVector, camera);
+            
+            // Slightly larger hitbox for raycasting
+            // (Even if visual misses slightly, logic might catch it)
+            raycaster.params.Points.threshold = 0.5;
+
+            const intersects = raycaster.intersectObjects(enemies);
+
+            if (intersects.length > 0) {
+                const hitObj = intersects[0].object;
+                
+                playSound('hit');
+                createFloatingText("HIT!", STATE.finalAimVector.x, STATE.finalAimVector.y, '#00ff00');
+                
+                scene.remove(hitObj);
+                enemies = enemies.filter(e => e !== hitObj);
+                
+                STATE.score += 100;
+                scoreEl.innerText = "SCORE: " + STATE.score;
+
+                spawnEnemy();
+            } else {
+                createFloatingText("MISS", STATE.finalAimVector.x, STATE.finalAimVector.y, '#ffffff');
+            }
+        }
+
+        function updateEnemies() {
+            enemies.forEach(enemy => {
+                enemy.position.lerp(new THREE.Vector3(0,0,0), CONFIG.DISC_SPEED);
+                enemy.rotation.x += 0.05;
+                enemy.rotation.z += 0.05;
+
+                if(enemy.position.distanceTo(new THREE.Vector3(0,0,0)) < 1) {
+                    scene.remove(enemy);
+                    enemies = enemies.filter(e => e !== enemy);
+                    spawnEnemy();
+                }
+            });
+        }
+
+        /**
+         * 6. MAIN LOOP
+         */
+        const aiInterval = 1000 / CONFIG.AI_FPS_LIMIT;
+
+        function animate(time) {
+            requestAnimationFrame(animate);
+
+            if(!STATE.isLoading) {
+                updateEnemies();
+                updateReticleAndLaser();
+            }
+            renderer.render(scene, camera);
+
+            if (time - STATE.lastAITime > aiInterval && videoElement.readyState === 4) {
+                STATE.lastAITime = time;
+                try {
+                    hands.send({image: videoElement});
+                } catch (err) {
+                    console.error("MediaPipe Recovered from error:", err);
+                }
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate(0);
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Divine Particles | Krishna Gesture</title>
+    
+    <!-- Three.js & MediaPipe Dependencies -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; background: #050505; color: white; font-family: sans-serif; }
+        
+        #canvas-container { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
+        #input-video { display: none; } /* Hidden video element */
+
+        /* UI Layer */
+        #ui-layer {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 10; pointer-events: none;
+            display: flex; flex-direction: column; justify-content: space-between; p-20;
+        }
+
+        .hud-top {
+            padding: 20px;
+            display: flex; justify-content: space-between; align-items: flex-start;
+        }
+
+        h1 {
+            margin: 0; font-weight: 300; letter-spacing: 2px;
+            background: linear-gradient(90deg, #00f2ff, #FFD700);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+
+        .status {
+            font-size: 12px; font-family: monospace; color: #666; 
+            border: 1px solid #333; padding: 5px 10px; border-radius: 10px;
+            transition: 0.3s;
+        }
+        .status.active { color: #00ff88; border-color: #00ff88; }
+        .status.divine { color: #FFD700; border-color: #FFD700; background: rgba(255, 215, 0, 0.1); }
+
+        /* Namaste Text */
+        #divine-text {
+            position: absolute; top: 50%; left: 50%; 
+            transform: translate(-50%, -50%);
+            font-size: 4rem; font-family: 'Georgia', serif; color: #FFD700;
+            text-shadow: 0 0 30px #FFD700;
+            opacity: 0; transition: opacity 1s ease;
+            pointer-events: none;
+            text-align: center;
+        }
+        #divine-text span { display: block; font-size: 1.5rem; letter-spacing: 5px; color: #fff; margin-top: 10px; }
+        #divine-text.visible { opacity: 1; }
+
+        /* Start Button Overlay */
+        #start-overlay {
+            position: absolute; inset: 0; background: rgba(0,0,0,0.9); z-index: 20;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+        }
+        button {
+            padding: 15px 40px; background: #00f2ff; border: none; border-radius: 30px;
+            font-size: 18px; font-weight: bold; cursor: pointer; margin-top: 20px;
+            box-shadow: 0 0 20px rgba(0, 242, 255, 0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Video & Canvas -->
+    <video id="input-video"></video>
+    <div id="canvas-container"></div>
+
+    <!-- UI -->
+    <div id="divine-text">
+        Jai Shri Krishna
+        <span>NAMASTE DETECTED</span>
+    </div>
+
+    <div id="ui-layer">
+        <div class="hud-top">
+            <div>
+                <h1>PARTICLE ENGINE</h1>
+                <p style="font-size: 12px; color: #888;">Moves with hand • Join hands for Divine Mode</p>
+            </div>
+            <div id="status-badge" class="status">CAMERA OFF</div>
+        </div>
+    </div>
+
+    <div id="start-overlay">
+        <h2>Interactive Particle Experience</h2>
+        <p style="color: #aaa; text-align: center; line-height: 1.6;">
+            1. Allow Camera Access<br>
+            2. Move hands to guide particles<br>
+            3. <b>Join hands (Namaste)</b> to see the Divine Face
+        </p>
+        <button id="btn-start">Start Experience</button>
+    </div>
+
+    <script>
+        // CONFIGURATION
+        const CONFIG = {
+            count: 15000,
+            baseColor: new THREE.Color(0x00f2ff), // Cyan
+            divineColor: new THREE.Color(0xFFD700), // Gold
+            handPos: new THREE.Vector3(0, 0, 0),
+            isNamaste: false,
+            gestureOpenness: 1.0
+        };
+
+        // Cache for Krishna Shape Points
+        let krishnaPoints = [];
+
+        // --------------------------------------------------------
+        // 1. SETUP THREE.JS
+        // --------------------------------------------------------
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x050505, 0.02);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 35;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+
+        // --------------------------------------------------------
+        // 2. CREATE PARTICLES
+        // --------------------------------------------------------
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(CONFIG.count * 3);
+        const targets = new Float32Array(CONFIG.count * 3);
+        const colors = new Float32Array(CONFIG.count * 3);
+
+        // Init Particles randomly
+        for(let i=0; i<CONFIG.count; i++) {
+            const i3 = i*3;
+            positions[i3] = (Math.random()-0.5)*50;
+            positions[i3+1] = (Math.random()-0.5)*50;
+            positions[i3+2] = (Math.random()-0.5)*50;
+            
+            colors[i3] = CONFIG.baseColor.r;
+            colors[i3+1] = CONFIG.baseColor.g;
+            colors[i3+2] = CONFIG.baseColor.b;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        const material = new THREE.ShaderMaterial({
+            uniforms: {
+                uTime: { value: 0 },
+                uSize: { value: 3.0 * renderer.getPixelRatio() }
+            },
+            vertexShader: `
+                uniform float uTime;
+                uniform float uSize;
+                attribute vec3 color;
+                varying vec3 vColor;
+                void main() {
+                    vColor = color;
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    gl_PointSize = uSize * (25.0 / -mvPosition.z);
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                varying vec3 vColor;
+                void main() {
+                    float d = distance(gl_PointCoord, vec2(0.5));
+                    if(d > 0.5) discard;
+                    gl_FragColor = vec4(vColor, 0.8);
+                }
+            `,
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+        });
+
+        const particleSystem = new THREE.Points(geometry, material);
+        scene.add(particleSystem);
+
+        // --------------------------------------------------------
+        // 3. GENERATE KRISHNA SHAPE (Procedural Canvas)
+        // --------------------------------------------------------
+        function generateKrishnaBitmap() {
+            const size = 300;
+            const cvs = document.createElement('canvas');
+            cvs.width = size; cvs.height = size;
+            const ctx = cvs.getContext('2d');
+            
+            // Background black (transparent)
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0,0,size,size);
+            
+            ctx.fillStyle = '#FFF'; // Pixels we want
+            
+            // 1. Face Profile
+            ctx.beginPath();
+            ctx.moveTo(140, 220); // Chin
+            ctx.quadraticCurveTo(170, 210, 170, 150); // Cheek/Ear area
+            ctx.lineTo(170, 100); 
+            ctx.quadraticCurveTo(160, 60, 120, 60); // Forehead
+            ctx.lineTo(100, 60);
+            ctx.quadraticCurveTo(90, 80, 90, 100); // Nose bridge
+            ctx.lineTo(80, 120); // Nose tip
+            ctx.lineTo(100, 130); // Under nose
+            ctx.lineTo(100, 140); // Lips
+            ctx.quadraticCurveTo(110, 200, 140, 220); // Jaw
+            ctx.fill();
+
+            // 2. Turban / Hair Bun
+            ctx.beginPath();
+            ctx.arc(140, 70, 35, Math.PI, 0); 
+            ctx.fill();
+
+            // 3. Peacock Feather
+            ctx.beginPath();
+            ctx.ellipse(140, 25, 12, 25, -0.3, 0, Math.PI*2);
+            ctx.fill();
+            
+            // 4. Flute
+            ctx.save();
+            ctx.translate(130, 170);
+            ctx.rotate(0.2);
+            ctx.fillRect(-60, -5, 120, 10);
+            ctx.restore();
+
+            // Hands holding flute
+            ctx.beginPath();
+            ctx.arc(100, 165, 10, 0, Math.PI*2);
+            ctx.arc(150, 175, 10, 0, Math.PI*2);
+            ctx.fill();
+
+            // Extract Points
+            const imgData = ctx.getImageData(0,0,size,size);
+            const points = [];
+            for(let y=0; y<size; y+=3) {
+                for(let x=0; x<size; x+=3) {
+                    const i = (y*size + x) * 4;
+                    if(imgData.data[i] > 100) {
+                        points.push({
+                            x: (x - size/2) * 0.15, // Scale down
+                            y: -(y - size/2) * 0.15, // Invert Y
+                            z: 0
+                        });
+                    }
+                }
+            }
+            krishnaPoints = points;
+        }
+        generateKrishnaBitmap();
+
+        // --------------------------------------------------------
+        // 4. LOGIC: UPDATE TARGETS
+        // --------------------------------------------------------
+        function updateTargets() {
+            const count = CONFIG.count;
+            
+            for(let i=0; i<count; i++) {
+                const i3 = i*3;
+                let x, y, z;
+
+                if(CONFIG.isNamaste && krishnaPoints.length > 0) {
+                    // MAPPING TO KRISHNA FACE
+                    const p = krishnaPoints[i % krishnaPoints.length];
+                    x = p.x;
+                    y = p.y;
+                    z = p.z; // Flat 2D image in 3D space
+                    
+                    // Add slight shimmering depth
+                    z += (Math.random()-0.5) * 1.0; 
+                } else {
+                    // DEFAULT: SPHERE + NOISE
+                    const phi = Math.acos(-1 + (2 * i) / count);
+                    const theta = Math.sqrt(count * Math.PI) * phi;
+                    const r = 15 * CONFIG.gestureOpenness; // Expand on open hand
+                    
+                    x = r * Math.cos(theta) * Math.sin(phi);
+                    y = r * Math.sin(theta) * Math.sin(phi);
+                    z = r * Math.cos(phi);
+                }
+
+                targets[i3] = x;
+                targets[i3+1] = y;
+                targets[i3+2] = z;
+            }
+        }
+
+        // --------------------------------------------------------
+        // 5. ANIMATION LOOP
+        // --------------------------------------------------------
+        function animate() {
+            requestAnimationFrame(animate);
+            material.uniforms.uTime.value = performance.now() / 1000;
+
+            const pos = geometry.attributes.position.array;
+            const col = geometry.attributes.color.array;
+            
+            // Re-calculate targets continuously for dynamic sphere expansion
+            updateTargets();
+
+            // Determine Target Color
+            const targetColor = CONFIG.isNamaste ? CONFIG.divineColor : CONFIG.baseColor;
+
+            for(let i=0; i<CONFIG.count; i++) {
+                const i3 = i*3;
+
+                // MOVEMENT LOGIC
+                let tx = targets[i3];
+                let ty = targets[i3+1];
+                let tz = targets[i3+2];
+
+                // Hand Following (Add Offset)
+                // If Namaste, stay in center. If not, follow hand.
+                if(!CONFIG.isNamaste) {
+                    tx += CONFIG.handPos.x;
+                    ty += CONFIG.handPos.y;
+                    
+                    // Add Noise based on gesture
+                    tx += (Math.random()-0.5) * CONFIG.gestureOpenness;
+                    ty += (Math.random()-0.5) * CONFIG.gestureOpenness;
+                    tz += (Math.random()-0.5) * CONFIG.gestureOpenness;
+                }
+
+                // Physics (Lerp)
+                // Namaste = snap faster (0.1). Normal = flowy (0.05).
+                const speed = CONFIG.isNamaste ? 0.08 : 0.05;
+
+                pos[i3] += (tx - pos[i3]) * speed;
+                pos[i3+1] += (ty - pos[i3+1]) * speed;
+                pos[i3+2] += (tz - pos[i3+2]) * speed;
+
+                // Color Lerp
+                col[i3] += (targetColor.r - col[i3]) * 0.03;
+                col[i3+1] += (targetColor.g - col[i3+1]) * 0.03;
+                col[i3+2] += (targetColor.b - col[i3+2]) * 0.03;
+            }
+
+            geometry.attributes.position.needsUpdate = true;
+            geometry.attributes.color.needsUpdate = true;
+
+            // Rotation
+            if(CONFIG.isNamaste) {
+                // Stabilize rotation to face forward
+                particleSystem.rotation.y = THREE.MathUtils.lerp(particleSystem.rotation.y, 0, 0.05);
+                particleSystem.rotation.x = THREE.MathUtils.lerp(particleSystem.rotation.x, 0, 0.05);
+            } else {
+                particleSystem.rotation.y += 0.002;
+            }
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // --------------------------------------------------------
+        // 6. HAND TRACKING & LOGIC
+        // --------------------------------------------------------
+        const videoElement = document.getElementById('input-video');
+        const statusEl = document.getElementById('status-badge');
+        const divineText = document.getElementById('divine-text');
+
+        function onResults(results) {
+            const hands = results.multiHandLandmarks;
+
+            if (hands && hands.length > 0) {
+                // 1. Calculate Average Hand Position (Center Point)
+                let avgX = 0, avgY = 0;
+                hands.forEach(h => {
+                    avgX += h[9].x; // Middle finger base
+                    avgY += h[9].y;
+                });
+                avgX /= hands.length;
+                avgY /= hands.length;
+
+                // Map Webcam (0-1) to 3D Space (-25 to 25)
+                // Invert X because webcam is mirrored
+                CONFIG.handPos.set((0.5 - avgX) * 40, -(avgY - 0.5) * 30, 0);
+
+                // 2. Namaste Detection (Needs 2 Hands)
+                let namasteDetected = false;
+                if(hands.length === 2) {
+                    const h1 = hands[0];
+                    const h2 = hands[1];
+
+                    // Check distance between wrists (index 0) and middle finger tips (index 12)
+                    const distWrists = Math.hypot(h1[0].x - h2[0].x, h1[0].y - h2[0].y);
+                    const distTips = Math.hypot(h1[12].x - h2[12].x, h1[12].y - h2[12].y);
+
+                    // Thresholds for "Hands Joined"
+                    if(distWrists < 0.15 && distTips < 0.15) {
+                        namasteDetected = true;
+                    }
+                }
+
+                // 3. State Update
+                if(namasteDetected) {
+                    if(!CONFIG.isNamaste) {
+                        CONFIG.isNamaste = true;
+                        statusEl.innerText = "DIVINE MODE DETECTED";
+                        statusEl.className = "status divine";
+                        divineText.classList.add('visible');
+                    }
+                } else {
+                    if(CONFIG.isNamaste) {
+                        CONFIG.isNamaste = false;
+                        statusEl.innerText = "TRACKING HANDS";
+                        statusEl.className = "status active";
+                        divineText.classList.remove('visible');
+                    }
+                }
+
+                // 4. Openness (for particle spread)
+                // Use first hand to determine if hand is open or fist
+                if(hands[0]) {
+                    const wrist = hands[0][0];
+                    const tip = hands[0][9];
+                    const d = Math.hypot(wrist.x - tip.x, wrist.y - tip.y);
+                    // Map distance to openness scalar
+                    CONFIG.gestureOpenness = 0.5 + (d * 3); 
+                }
+
+            } else {
+                CONFIG.isNamaste = false;
+                divineText.classList.remove('visible');
+                statusEl.innerText = "NO HANDS";
+                statusEl.className = "status";
+            }
+        }
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.5
+        });
+        hands.onResults(onResults);
+
+        const cameraFeed = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            width: 640, height: 480
+        });
+
+        // Start Interaction
+        document.getElementById('btn-start').addEventListener('click', () => {
+            document.getElementById('start-overlay').style.display = 'none';
+            cameraFeed.start();
+        });
+
+        // Window Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Six Paths Sage Mode: Complete Transformation</title>
+    
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Permanent+Marker&display=swap" rel="stylesheet">
+
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        :root {
+            --chakra-core: #fff5c2;
+            --chakra-mid: #ffd700;
+            --chakra-outer: #ff8c00;
+            --void-black: #0a0a0a;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            overflow: hidden;
+            font-family: 'Cinzel', serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            background: #000;
+        }
+
+        .input_video { 
+            display: none; 
+            position: absolute;
+            top: 0; left: 0;
+        }
+
+        .output_canvas {
+            position: absolute;
+            left: 0; top: 0;
+            width: 100%; height: 100%;
+            transform: scaleX(-1); /* Mirror Mode */
+            object-fit: cover;
+        }
+
+        /* UI Layer */
+        #ui-layer {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+
+        h1 {
+            color: var(--chakra-mid);
+            text-shadow: 0 0 20px var(--chakra-outer), 2px 2px 0 #000;
+            font-size: 2rem;
+            margin-top: 20px;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            text-align: center;
+        }
+
+        .sub-text {
+            font-size: 0.9rem;
+            color: #fff;
+            letter-spacing: 2px;
+            margin-top: 5px;
+            background: rgba(0,0,0,0.6);
+            padding: 5px 15px;
+            border-radius: 4px;
+            border: 1px solid var(--chakra-outer);
+        }
+
+        /* Loading / Error Overlay */
+        #status-overlay {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: white;
+            z-index: 50;
+            pointer-events: none;
+        }
+        .spinner {
+            border: 4px solid rgba(255, 140, 0, 0.3);
+            border-top: 4px solid var(--chakra-mid);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Controls */
+        #controls-container {
+            text-align: center;
+            width: 100%;
+            pointer-events: auto;
+            margin-bottom: 40px;
+        }
+
+        #transcend-btn {
+            background: rgba(0,0,0,0.6);
+            color: var(--chakra-mid);
+            border: 2px solid var(--chakra-mid);
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            font-family: 'Cinzel', serif;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-shadow: 0 0 10px var(--chakra-outer);
+            box-shadow: 0 0 20px rgba(255, 140, 0, 0.4);
+            position: relative;
+            overflow: hidden;
+        }
+
+        #transcend-btn:hover {
+            background: var(--chakra-outer);
+            color: #000;
+            box-shadow: 0 0 40px var(--chakra-mid);
+        }
+
+        #gesture-hint {
+            margin-bottom: 15px;
+            font-size: 1rem;
+            color: #fff;
+            text-shadow: 0 0 5px #000;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.6; transform: scale(0.95); }
+            50% { opacity: 1; transform: scale(1); }
+            100% { opacity: 0.6; transform: scale(0.95); }
+        }
+
+        #flash-overlay {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #fff;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.1s;
+            z-index: 20;
+        }
+
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <video class="input_video" playsinline muted autoplay></video>
+    <canvas class="output_canvas"></canvas>
+    <div id="flash-overlay"></div>
+    
+    <div id="status-overlay">
+        <div class="spinner"></div>
+        <div id="status-text">Initializing Jutsu Engine...<br>Please Allow Camera</div>
+    </div>
+
+    <div id="ui-layer">
+        <div>
+            <h1>Six Paths Senjutsu</h1>
+            <div class="sub-text">RIKUDŌ SENNIN MODE</div>
+        </div>
+        
+        <div id="controls-container">
+            <div id="gesture-hint">👆 HAND SIGN: Left Index & Middle Finger Together</div>
+            <button id="transcend-btn" onclick="app.triggerTransformation()">TRANSCEND</button>
+        </div>
+    </div>
+</div>
+
+<script>
+/**
+ * -----------------------------------------------------------------------
+ * CONFIGURATION & CONSTANTS
+ * -----------------------------------------------------------------------
+ */
+const CONFIG = {
+    colors: {
+        core: '#fff5c2',   // Bright center
+        mid: '#ffd700',    // Gold
+        outer: '#ff8c00',  // Orange/Red flame
+        black: '#0a0a0a'   // Undersuit
+    },
+    physics: {
+        orbLag: 0.08, 
+        orbRadius: 22,
+        orbDistance: 200
+    }
+};
+
+/**
+ * -----------------------------------------------------------------------
+ * UTILS
+ * -----------------------------------------------------------------------
+ */
+function lerp(start, end, amt) {
+    return (1 - amt) * start + amt * end;
+}
+
+function drawMagatama(ctx, x, y, size, rotation, color = '#000') {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    ctx.fillStyle = color; 
+    ctx.beginPath();
+    ctx.arc(0, 0, size, 0, Math.PI * 2);
+    ctx.moveTo(size * 0.8, -size * 0.2);
+    ctx.bezierCurveTo(size * 2, -size * 1.5, size * 0.5, -size * 2.5, 0, -size * 3);
+    ctx.lineTo(0, -size);
+    ctx.fill();
+    ctx.restore();
+}
+
+/**
+ * -----------------------------------------------------------------------
+ * TRUTH-SEEKER ORB SYSTEM
+ * -----------------------------------------------------------------------
+ */
+class OrbSystem {
+    constructor() {
+        this.orbs = [];
+        this.count = 9;
+        this.initOrbs();
+    }
+
+    initOrbs() {
+        for(let i=0; i<this.count; i++) {
+            this.orbs.push({
+                x: 0, y: 0, 
+                targetX: 0, targetY: 0,
+                angle: (i / this.count) * Math.PI * 2,
+                floatOffset: Math.random() * Math.PI * 2
+            });
+        }
+    }
+
+    update(centerX, centerY, scale, isActive) {
+        if (!isActive) return;
+        const anchorX = centerX;
+        const anchorY = centerY + (80 * scale); // Position behind shoulders
+        const radius = CONFIG.physics.orbDistance * scale;
+
+        this.orbs.forEach((orb, i) => {
+            orb.angle += 0.005; 
+            orb.floatOffset += 0.05;
+            orb.targetX = anchorX + Math.cos(orb.angle) * radius;
+            orb.targetY = anchorY + Math.sin(orb.angle) * radius + Math.sin(orb.floatOffset)*10;
+            orb.x = lerp(orb.x, orb.targetX, CONFIG.physics.orbLag);
+            orb.y = lerp(orb.y, orb.targetY, CONFIG.physics.orbLag);
+        });
+    }
+
+    draw(ctx, scale) {
+        const size = CONFIG.physics.orbRadius * scale;
+        this.orbs.forEach(orb => {
+            const grad = ctx.createRadialGradient(
+                orb.x - size*0.3, orb.y - size*0.3, size * 0.1,
+                orb.x, orb.y, size
+            );
+            grad.addColorStop(0, '#555');
+            grad.addColorStop(0.3, '#111');
+            grad.addColorStop(1, '#000');
+
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(orb.x, orb.y, size, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // White rim light
+            ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        });
+    }
+}
+
+/**
+ * -----------------------------------------------------------------------
+ * MAIN APPLICATION
+ * -----------------------------------------------------------------------
+ */
+class RikudoApp {
+    constructor() {
+        this.checkSecureContext();
+        this.video = document.querySelector('.input_video');
+        this.canvas = document.querySelector('.output_canvas');
+        this.ctx = this.canvas.getContext('2d');
+        
+        // Offscreen canvas for Cloak generation
+        this.maskCanvas = document.createElement('canvas');
+        this.maskCtx = this.maskCanvas.getContext('2d');
+        
+        this.orbSystem = new OrbSystem();
+        this.transcendState = 0; // 0: Idle, 1: Charging, 2: Active
+        this.chargeTimer = 0;
+        this.pulseFrame = 0;
+        
+        // Managers
+        this.segmentationMask = null;
+        this.hands = null;
+        this.faceMesh = null;
+        this.selfieSegmentation = null;
+        
+        this.init();
+        window.addEventListener('resize', () => this.resize());
+        this.resize();
+    }
+
+    checkSecureContext() {
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+            alert("⚠️ Requires HTTPS or Localhost for Camera access.");
+        }
+    }
+
+    resize() {
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+        this.maskCanvas.width = window.innerWidth;
+        this.maskCanvas.height = window.innerHeight;
+    }
+
+    async init() {
+        try {
+            // 1. Hands (Gesture)
+            this.hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+            this.hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7 });
+            this.hands.onResults(this.onHandResults.bind(this));
+
+            // 2. Face Mesh (Landmarks)
+            this.faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
+            this.faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
+            this.faceMesh.onResults(this.onFaceMeshResults.bind(this));
+
+            // 3. Segmentation (Cloak Mask)
+            this.selfieSegmentation = new SelfieSegmentation({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`});
+            this.selfieSegmentation.setOptions({ modelSelection: 1 });
+            this.selfieSegmentation.onResults(this.onSegmentationResults.bind(this));
+
+            // 4. Camera
+            const camera = new Camera(this.video, {
+                onFrame: async () => { await this.processFrame(); },
+                width: 1280, height: 720, facingMode: 'user'
+            });
+
+            await camera.start();
+            document.getElementById('status-overlay').style.display = 'none';
+
+        } catch (error) {
+            document.getElementById('status-text').innerText = "Error: " + error.message;
+        }
+    }
+
+    async processFrame() {
+        this.pulseFrame++;
+        if (this.transcendState === 2) {
+            // Prioritize Segmentation loop
+            await this.selfieSegmentation.send({image: this.video});
+        } else {
+            // Idle loop
+            if(this.hands) await this.hands.send({image: this.video});
+            await this.faceMesh.send({image: this.video});
+        }
+    }
+
+    onHandResults(results) {
+        if (this.transcendState !== 0) return; 
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            const l = results.multiHandLandmarks[0];
+            const idx = l[8], mid = l[12], ring = l[16], pinky = l[20];
+            
+            // Check: Index & Middle UP, others DOWN
+            const up = (pt, base) => pt.y < l[base].y;
+            const down = (pt, base) => pt.y > l[base].y;
+
+            if (up(idx, 6) && up(mid, 10) && down(ring, 14) && down(pinky, 18)) {
+                // Check: Touching
+                const dist = Math.hypot(idx.x - mid.x, idx.y - mid.y);
+                if (dist < 0.06) {
+                    this.triggerTransformation();
+                }
+            }
+        }
+    }
+
+    onSegmentationResults(results) {
+        this.segmentationMask = results.segmentationMask;
+        this.faceMesh.send({image: this.video});
+    }
+
+    onFaceMeshResults(results) {
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        this.ctx.clearRect(0, 0, w, h);
+
+        // 1. Draw Camera Feed
+        this.ctx.drawImage(results.image, 0, 0, w, h);
+
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+            const landmarks = results.multiFaceLandmarks[0];
+            
+            // Geometry Calculations
+            const nose = landmarks[1];
+            const leftCheek = landmarks[234];
+            const rightCheek = landmarks[454];
+            const chin = landmarks[152];
+            const faceWidth = Math.hypot((rightCheek.x - leftCheek.x)*w, (rightCheek.y - leftCheek.y)*h);
+            const scale = faceWidth / 150;
+            const centerX = nose.x * w;
+            const centerY = nose.y * h;
+
+            // 2. The Chakra Cloak (Behind Face but over body)
+            if (this.segmentationMask && this.transcendState === 2) {
+                this.drawSageCloak(w, h, landmarks, scale);
+            }
+
+            // 3. Truth Seeker Orbs (Behind Head)
+            if (this.transcendState === 2) {
+                this.orbSystem.update(centerX, centerY, scale, true);
+                this.orbSystem.draw(this.ctx, scale);
+            }
+
+            // 4. Face Markings (Foreground)
+            if (this.transcendState > 0) {
+                const alpha = (this.transcendState === 1) ? this.chargeTimer : 1.0;
+                this.ctx.globalAlpha = alpha;
+                
+                // Whiskers
+                this.drawWhiskers(landmarks, w, h);
+                // Eyes
+                this.drawSixPathsEyes(landmarks, w, h);
+                
+                this.ctx.globalAlpha = 1.0;
+            }
+        }
+    }
+
+    // --- THE CLOTH & GLOW ENGINE ---
+
+    drawSageCloak(w, h, landmarks, scale) {
+        const chin = landmarks[152];
+        const leftEar = landmarks[234];
+        const rightEar = landmarks[454];
+        
+        // --- STEP A: GENERATE CLOAK TEXTURE ON MASK CANVAS ---
+        this.maskCtx.clearRect(0, 0, w, h);
+        
+        // 1. Draw Segmentation (User Silhouette)
+        this.maskCtx.drawImage(this.segmentationMask, 0, 0, w, h);
+        
+        // 2. Apply "Divine Fire" Gradient (Source-In)
+        this.maskCtx.globalCompositeOperation = 'source-in';
+        
+        // Dynamic Pulse
+        const pulse = Math.sin(this.pulseFrame * 0.1) * 20;
+        
+        // Fire Gradient (Top to Bottom)
+        const grad = this.maskCtx.createLinearGradient(0, h*0.2, 0, h);
+        grad.addColorStop(0, CONFIG.colors.core); // White/Yellow Top
+        grad.addColorStop(0.3, CONFIG.colors.mid); // Gold Middle
+        grad.addColorStop(0.8, CONFIG.colors.outer); // Orange Bottom
+        
+        this.maskCtx.fillStyle = grad;
+        this.maskCtx.fillRect(0, 0, w, h);
+
+        // 3. Draw "Black Undersuit" (Zipper/Open Coat Effect)
+        // We draw this ON TOP of the gold mask, but still clipped by segmentation
+        // Logic: Vertical strip down the center of chest
+        
+        const chestX = chin.x * w;
+        const chestY = chin.y * h + (40 * scale);
+        const suitWidth = 140 * scale; 
+        
+        // Black Suit Gradient (Fade out at bottom)
+        const suitGrad = this.maskCtx.createLinearGradient(0, chestY, 0, h);
+        suitGrad.addColorStop(0, CONFIG.colors.black);
+        suitGrad.addColorStop(0.6, CONFIG.colors.black);
+        suitGrad.addColorStop(1, 'rgba(10,10,10,0)');
+
+        this.maskCtx.globalCompositeOperation = 'source-atop'; // Draw only where mask exists
+        this.maskCtx.fillStyle = suitGrad;
+        this.maskCtx.beginPath();
+        // V-Shape opening
+        this.maskCtx.moveTo(chestX - suitWidth*0.2, chestY); // Top Neck
+        this.maskCtx.lineTo(chestX + suitWidth*0.2, chestY);
+        this.maskCtx.lineTo(chestX + suitWidth*0.8, h); // Flair out at bottom
+        this.maskCtx.lineTo(chestX - suitWidth*0.8, h);
+        this.maskCtx.fill();
+
+        // 4. Gold Circle Seal (On Stomach)
+        const circleY = chestY + (180 * scale);
+        this.maskCtx.strokeStyle = CONFIG.colors.mid;
+        this.maskCtx.lineWidth = 8 * scale;
+        this.maskCtx.beginPath();
+        this.maskCtx.arc(chestX, circleY, 25 * scale, 0, Math.PI * 2);
+        this.maskCtx.stroke();
+        
+        // --- STEP B: COMPOSITE TO MAIN CANVAS ---
+        this.maskCtx.globalCompositeOperation = 'source-over'; // Reset
+
+        this.ctx.save();
+        
+        // Layer 1: Intense Outer Glow (Screen Blend)
+        this.ctx.globalCompositeOperation = 'screen';
+        this.ctx.filter = `blur(${25 + (pulse*0.2)}px)`;
+        this.ctx.globalAlpha = 0.8;
+        this.ctx.drawImage(this.maskCanvas, 0, 0);
+        
+        // Layer 2: Core Form (Sharper)
+        this.ctx.filter = 'blur(2px)';
+        this.ctx.globalAlpha = 0.9;
+        this.ctx.drawImage(this.maskCanvas, 0, 0); // Draws the textured suit/cloak
+        
+        // Layer 3: High Collar (Procedural Vector Drawing)
+        // This is drawn ON TOP of the glow to look sharp
+        this.ctx.globalCompositeOperation = 'source-over';
+        this.ctx.filter = 'none';
+        this.drawHighCollar(landmarks, w, h, scale);
+
+        // Layer 4: Magatamas (Necklace)
+        this.drawMagatamaNecklace(landmarks, w, h, scale);
+
+        this.ctx.restore();
+    }
+
+    drawHighCollar(landmarks, w, h, scale) {
+        // Points: Ears and Jaw
+        const leftEar = landmarks[234];
+        const rightEar = landmarks[454];
+        const jawLeft = landmarks[177]; // Lower jaw
+        const jawRight = landmarks[401];
+        
+        // Collar Math
+        const collarHeight = 120 * scale;
+        const spread = 40 * scale;
+
+        this.ctx.fillStyle = CONFIG.colors.mid;
+        this.ctx.strokeStyle = CONFIG.colors.outer;
+        this.ctx.lineWidth = 3;
+
+        // Function to draw one side of collar
+        const drawSide = (ear, jaw, isLeft) => {
+            const ex = ear.x * w;
+            const ey = ear.y * h;
+            const jx = jaw.x * w;
+            const jy = jaw.y * h;
+            
+            const dir = isLeft ? -1 : 1;
+
+            this.ctx.beginPath();
+            // Start at jaw
+            this.ctx.moveTo(jx, jy);
+            // Curve out to ear
+            this.ctx.quadraticCurveTo(ex + (dir*20), ey, ex + (dir*spread), ey - collarHeight);
+            // Top point of collar
+            this.ctx.lineTo(ex + (dir*spread*0.2), ey - collarHeight + (20*scale));
+            // Curve back behind head
+            this.ctx.lineTo(ex, ey + (20*scale));
+            this.ctx.closePath();
+            
+            // Fill with gradient
+            const grad = this.ctx.createLinearGradient(ex, ey, ex, ey - collarHeight);
+            grad.addColorStop(0, CONFIG.colors.mid);
+            grad.addColorStop(1, CONFIG.colors.core);
+            this.ctx.fillStyle = grad;
+            
+            this.ctx.fill();
+            this.ctx.stroke();
+        };
+
+        drawSide(leftEar, jawLeft, true);
+        drawSide(rightEar, jawRight, false);
+    }
+
+    drawMagatamaNecklace(landmarks, w, h, scale) {
+        const chin = landmarks[152];
+        const leftShoulderX = landmarks[234].x * w; // Approx using cheek
+        const rightShoulderX = landmarks[454].x * w;
+        
+        const chestY = chin.y * h + (90 * scale);
+        const centerX = chin.x * w;
+        const width = (rightShoulderX - leftShoulderX) * 1.5;
+        
+        // Draw 6 Magatamas
+        for(let i=0; i<6; i++) {
+            const t = (i / 5) - 0.5; // -0.5 to 0.5
+            const x = centerX + (width * t * 0.8);
+            const yOffset = Math.abs(t) * 30 * scale; // Curve up at ends
+            
+            // Draw Black Magatama with Gold Rim
+            this.ctx.shadowColor = CONFIG.colors.mid;
+            this.ctx.shadowBlur = 10;
+            drawMagatama(this.ctx, x, chestY - yOffset, 10 * scale, Math.PI);
+            this.ctx.shadowBlur = 0;
+        }
+    }
+
+    drawSixPathsEyes(landmarks, w, h) {
+        const drawEye = (centerIdx, radiusIndices) => {
+            const center = landmarks[centerIdx];
+            const edge = landmarks[radiusIndices[0]];
+            const r = Math.hypot((center.x - edge.x)*w, (center.y - edge.y)*h) * 1.15;
+            const cx = center.x * w;
+            const cy = center.y * h;
+
+            this.ctx.save();
+            this.ctx.translate(cx, cy);
+
+            // Glowing Gold Iris
+            this.ctx.shadowColor = CONFIG.colors.outer;
+            this.ctx.shadowBlur = 15;
+            this.ctx.beginPath();
+            this.ctx.arc(0, 0, r, 0, Math.PI * 2);
+            this.ctx.fillStyle = CONFIG.colors.mid;
+            this.ctx.fill();
+            this.ctx.shadowBlur = 0;
+
+            // Cross Pupil
+            this.ctx.fillStyle = '#000';
+            this.ctx.fillRect(-r, -r*0.25, r*2, r*0.5); // Toad Bar
+            this.ctx.beginPath();
+            this.ctx.ellipse(0, 0, r*0.35, r, 0, 0, Math.PI*2); // Fox Slit
+            this.ctx.fill();
+
+            this.ctx.restore();
+        };
+
+        drawEye(468, [469]);
+        drawEye(473, [474]);
+    }
+
+    drawWhiskers(landmarks, w, h) {
+        this.ctx.lineWidth = 5 * (w/1280);
+        this.ctx.strokeStyle = '#000';
+        this.ctx.lineCap = 'round';
+        // Left
+        this.drawCurve(landmarks, [123, 116, 111], w, h); 
+        this.drawCurve(landmarks, [205, 206, 203], w, h); 
+        this.drawCurve(landmarks, [212, 214, 210], w, h); 
+        // Right
+        this.drawCurve(landmarks, [352, 345, 340], w, h); 
+        this.drawCurve(landmarks, [425, 426, 423], w, h); 
+        this.drawCurve(landmarks, [432, 434, 430], w, h); 
+    }
+
+    drawCurve(landmarks, indices, w, h) {
+        this.ctx.beginPath();
+        const start = landmarks[indices[0]];
+        this.ctx.moveTo(start.x * w, start.y * h);
+        for(let i=1; i<indices.length; i++) this.ctx.lineTo(landmarks[indices[i]].x * w, landmarks[indices[i]].y * h);
+        this.ctx.stroke();
+    }
+
+    triggerTransformation() {
+        if(this.transcendState === 0) {
+            this.transcendState = 1;
+            if(this.hands) { this.hands.close(); this.hands = null; }
+            document.getElementById('transcend-btn').innerText = "GATHERING CHAKRA...";
+            document.getElementById('transcend-btn').disabled = true;
+            document.getElementById('gesture-hint').style.display = 'none';
+            
+            let start = Date.now();
+            const loop = () => {
+                let elapsed = (Date.now() - start) / 1000;
+                if (elapsed < 2) {
+                    this.chargeTimer = elapsed / 2;
+                    requestAnimationFrame(loop);
+                } else {
+                    this.transcendState = 2;
+                    document.getElementById('flash-overlay').style.opacity = 1;
+                    setTimeout(() => document.getElementById('flash-overlay').style.opacity = 0, 500);
+                    document.getElementById('transcend-btn').style.display = 'none';
+                    document.querySelector('.sub-text').innerText = "RIKUDŌ MODE ACTIVE";
+                }
+            };
+            loop();
+        }
+    }
+}
+
+const app = new RikudoApp();
+
+</script>
+</body>
+</html>

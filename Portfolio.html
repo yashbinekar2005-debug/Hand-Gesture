@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YASH // SYSTEM ONLINE</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@300;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --obsidian: #0a0a0a;
+            --cyan-glow: #00f2ff;
+            --amber-glow: #ffb300;
+            --purple-glow: #bc00ff;
+        }
+        body {
+            background-color: var(--obsidian);
+            color: #e0e0e0;
+            font-family: 'Space Grotesk', sans-serif;
+            overflow-x: hidden;
+        }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        
+        /* Glassmorphism */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
+        }
+
+        /* Custom Cursor */
+        #cursor {
+            width: 20px;
+            height: 20px;
+            background: var(--cyan-glow);
+            border-radius: 50%;
+            position: fixed;
+            pointer-events: none;
+            z-index: 9999;
+            mix-blend-mode: difference;
+            transition: transform 0.1s ease;
+        }
+
+        /* Workshop Grid Effect */
+        .workshop-bg {
+            background-image: 
+                linear-gradient(rgba(0, 242, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 242, 255, 0.05) 1px, transparent 1px);
+            background-size: 50px 50px;
+            transform: perspective(1000px) rotateX(60deg) translateY(-200px);
+            position: fixed;
+            top: 0; left: -50%; width: 200%; height: 200%;
+            z-index: -1;
+        }
+
+        .scanline {
+            width: 100%; height: 2px;
+            background: rgba(0, 242, 255, 0.1);
+            position: absolute; top: 0;
+            animation: scan 4s linear infinite;
+        }
+        @keyframes scan { 0% { top: 0%; } 100% { top: 100%; } }
+    </style>
+</head>
+<body class="antialiased">
+
+    <div id="loader" class="fixed inset-0 z-[10000] bg-[#0a0a0a] flex flex-col items-center justify-center">
+        <div class="mono text-cyan-400 text-xl mb-4" id="load-text">INITIALIZING SYSTEM...</div>
+        <div class="w-64 h-1 bg-gray-800 rounded-full overflow-hidden">
+            <div id="load-bar" class="w-0 h-full bg-cyan-500"></div>
+        </div>
+    </div>
+
+    <div id="cursor"></div>
+
+    <div class="workshop-bg"></div>
+
+    <main id="viewport" class="relative">
+
+        <section class="h-screen w-full flex items-center justify-center px-6 relative overflow-hidden" id="hero">
+            <div class="glass-panel p-10 max-w-4xl w-full relative group">
+                <div class="scanline"></div>
+                <div class="flex flex-col md:flex-row items-center gap-10">
+                    <div class="relative">
+                        <div class="w-48 h-48 border-2 border-cyan-500 rounded-lg overflow-hidden relative">
+                            <img src="profile.jpg" alt="Yash Rajesh Binekar" class="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" onerror="this.src='https://via.placeholder.com/200x200?text=Yash'">
+                        </div>
+                        <div class="absolute -bottom-2 -right-2 bg-cyan-500 text-black px-2 py-1 mono text-xs">VERIFIED_CANDIDATE</div>
+                    </div>
+                    <div>
+                        <h1 class="text-6xl md:text-8xl font-bold tracking-tighter mb-4">YASH <span class="text-cyan-500">//</span></h1>
+                        <p class="mono text-cyan-400 mb-6 tracking-widest uppercase">Architect of Intelligent Systems</p>
+                        <p class="text-gray-400 max-w-md mb-8 leading-relaxed">
+                            B.Tech Computer Science Engineering student @ GWCT. Specialized in bridging the gap between <span class="text-white">Local AI</span>, <span class="text-white">Robotics</span>, and <span class="text-white">Augmented Realities</span>.
+                        </p>
+                        <button onclick="gsap.to(window, {duration: 2, scrollTo: '#study'})" class="px-8 py-3 border border-cyan-500 text-cyan-500 hover:bg-cyan-500 hover:text-black transition-all mono">INITIALIZE_PROFILE()</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="h-screen w-full flex items-center justify-center px-6" id="study">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-12 max-w-6xl">
+                <div class="glass-panel p-8 border-l-4 border-purple-500">
+                    <h2 class="text-4xl font-bold mb-6 text-purple-400">SERVER_RACK [AI/NLP]</h2>
+                    <div class="space-y-6">
+                        <div>
+                            <h3 class="mono text-white text-xl">VASU-AI / DESKTOP COMPANION</h3>
+                            <p class="text-gray-400 mt-2">A fully offline AI assistant. Orchestrating local LLMs via <span class="text-purple-300">Ollama</span> with a voice-interface powered by <span class="text-purple-300">pyttsx3</span> and SpeechRecognition.</p>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <span class="bg-purple-900/30 border border-purple-500/50 px-3 py-1 mono text-xs">Python</span>
+                            <span class="bg-purple-900/30 border border-purple-500/50 px-3 py-1 mono text-xs">Ollama</span>
+                            <span class="bg-purple-900/30 border border-purple-500/50 px-3 py-1 mono text-xs">NLP</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-center justify-center">
+                    <div class="text-purple-500/20 text-9xl font-bold mono select-none">0101<br>1010</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="h-screen w-full flex items-center justify-center px-6" id="lab">
+            <div class="glass-panel p-8 max-w-5xl w-full border-t-4 border-cyan-500">
+                <div class="flex justify-between items-start mb-10">
+                    <h2 class="text-4xl font-bold text-cyan-400">HOLOGRAM_EMITTER [AR]</h2>
+                    <span class="mono text-cyan-600">STATUS: ACTIVE</span>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div class="space-y-4">
+                        <h3 class="text-2xl text-white">Hand Gesture Control System</h3>
+                        <p class="text-gray-400">Synthesizing real-time human pose estimation using <span class="text-cyan-300">MediaPipe</span>. Maps hand gestures to animate 3D particle systems in <span class="text-cyan-300">Three.js</span>.</p>
+                        <a href="https://github.com/yashbinekar2005-debug/Hand-Gesture" class="inline-block text-cyan-500 hover:underline mono">VIEW_SOURCE_CODE ></a>
+                    </div>
+                    <div class="bg-cyan-500/5 rounded p-6 border border-cyan-500/20 flex flex-col justify-center">
+                        <div class="text-xs mono text-cyan-700 mb-2">// LOG_DATA</div>
+                        <div class="text-sm text-cyan-200">"Awarded Runner-Up at Paper Presentation for AI Desktop Integration."</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="h-screen w-full flex items-center justify-center px-6" id="lounge">
+            <div class="max-w-4xl w-full text-right">
+                <div class="glass-panel p-8 border-r-4 border-amber-500 inline-block text-left">
+                    <h2 class="text-4xl font-bold mb-6 text-amber-500">HARDWARE_WORKBENCH</h2>
+                    <p class="text-gray-400 mb-6 max-w-md">Integrating sensor arrays and L298N motor drivers through <span class="text-amber-300">ESP32</span> and <span class="text-amber-300">Arduino</span>. Engineering the physical layer of automation.</p>
+                    <div class="grid grid-cols-2 gap-4 mono text-xs">
+                        <div class="p-3 bg-amber-500/10 border border-amber-500/30">ULTRASONIC_SENSING: OK</div>
+                        <div class="p-3 bg-amber-500/10 border border-amber-500/30">MOTOR_CONTROL: OK</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <footer class="h-screen w-full flex flex-col items-center justify-center px-6" id="uplink">
+            <div class="text-center mb-16">
+                <h2 class="text-7xl font-bold mb-4 tracking-tighter">ESTABLISH <span class="text-white">UPLINK</span></h2>
+                <p class="mono text-gray-500">LOCATION: NAGPUR, MH // READY FOR COLLABORATION</p>
+            </div>
+            
+            <div class="flex flex-col md:flex-row gap-6 w-full max-w-3xl">
+                <button onclick="window.open('https://github.com/yashbinekar2005-debug', '_blank')" class="flex-1 p-8 glass-panel hover:border-cyan-500 transition-colors group">
+                    <div class="mono text-sm text-gray-500 mb-2">/SRC</div>
+                    <div class="text-2xl font-bold group-hover:text-cyan-400">GITHUB</div>
+                </button>
+                <button onclick="window.open('https://linkedin.com/in/yash-binekar-0951162a8', '_blank')" class="flex-1 p-8 glass-panel hover:border-blue-500 transition-colors group">
+                    <div class="mono text-sm text-gray-500 mb-2">/NET</div>
+                    <div class="text-2xl font-bold group-hover:text-blue-400">LINKEDIN</div>
+                </button>
+                <button onclick="window.location.href='mailto:yashbinekar2005@gmail.com'" class="flex-1 p-8 glass-panel hover:border-amber-500 transition-colors group">
+                    <div class="mono text-sm text-gray-500 mb-2">/MSG</div>
+                    <div class="text-2xl font-bold group-hover:text-amber-400">EMAIL</div>
+                </button>
+            </div>
+            <div class="mt-20 mono text-[10px] text-gray-700 uppercase tracking-[0.5em]">
+                &copy; 2026 YASH RAJESH BINEKAR // SYSTEM VERSION 4.0.2
+            </div>
+        </footer>
+
+    </main>
+
+    <script>
+        // Initialize GSAP Plugins
+        gsap.registerPlugin(ScrollTrigger);
+
+        // 1. Loader Logic
+        window.addEventListener('load', () => {
+            const tl = gsap.timeline();
+            tl.to("#load-bar", { width: "100%", duration: 1.5, ease: "power4.inOut" })
+              .to("#load-text", { opacity: 0, duration: 0.2 })
+              .to("#loader", { yPercent: -100, duration: 0.8, ease: "power4.inOut" });
+        });
+
+        // 2. Custom Cursor Logic
+        const cursor = document.getElementById('cursor');
+        document.addEventListener('mousemove', e => {
+            gsap.to(cursor, { x: e.clientX, y: e.clientY, duration: 0.1 });
+        });
+
+        // Magnetic Effect on Buttons
+        document.querySelectorAll('button').forEach(btn => {
+            btn.addEventListener('mouseenter', () => gsap.to(cursor, { scale: 3, opacity: 0.3 }));
+            btn.addEventListener('mouseleave', () => gsap.to(cursor, { scale: 1, opacity: 1 }));
+        });
+
+        // 3. Workshop Camera Pan (Cinematic Scrolling)
+        // This shifts the background grid and pans the "camera" as you scroll
+        gsap.to(".workshop-bg", {
+            scrollTrigger: {
+                trigger: "body",
+                start: "top top",
+                end: "bottom bottom",
+                scrub: 1
+            },
+            xPercent: -20,
+            yPercent: -10,
+            rotationX: 45
+        });
+
+        // 4. Reveal Animations for Sections
+        const sections = document.querySelectorAll('section');
+        sections.forEach(section => {
+            gsap.from(section.querySelectorAll('.glass-panel'), {
+                scrollTrigger: {
+                    trigger: section,
+                    start: "top center",
+                    toggleActions: "play none none reverse"
+                },
+                y: 50,
+                opacity: 0,
+                duration: 1,
+                ease: "power3.out"
+            });
+        });
+
+        // Typed Effect Emulation
+        const typingText = "Architect of Intelligent Systems & Immersive Digital Experiences.";
+        // ... (Optional: add typing library or logic here)
+    </script>
+</body>
+</html>

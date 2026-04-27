@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Surrounding Shadow Clone Jutsu (High Precision)</title>
+    
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+            font-family: 'Segoe UI', sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        #container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #input_video { display: none; }
+
+        /* UI */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            padding: 30px;
+            box-sizing: border-box;
+            background: radial-gradient(circle, transparent 60%, #000 100%);
+        }
+
+        h1 {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #fff;
+            text-transform: uppercase;
+            letter-spacing: 5px;
+            font-size: 1.5rem;
+            text-shadow: 0 0 20px #00aaff;
+            opacity: 0.8;
+            width: 100%;
+            text-align: center;
+        }
+
+        #controls {
+            pointer-events: auto;
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            width: 100%;
+            margin-bottom: 20px;
+        }
+
+        button {
+            background: rgba(0, 100, 255, 0.2);
+            border: 1px solid #00aaff;
+            color: #fff;
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 0 15px rgba(0, 170, 255, 0.3);
+            border-radius: 4px;
+        }
+
+        button:active { background: #00aaff; }
+
+        #status {
+            position: absolute;
+            top: 60px;
+            width: 100%;
+            text-align: center;
+            color: #00eaff;
+            font-size: 1rem;
+            font-weight: bold;
+            text-shadow: 0 0 5px #000;
+        }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <video id="input_video"></video>
+    <canvas id="output_canvas"></canvas>
+    
+    <div id="ui-layer">
+        <h1>Shadow Clone Jutsu</h1>
+        <div id="status">Gathering Chakra...</div>
+        <div id="controls">
+            <button id="spawn-btn">Summon</button>
+            <button id="clear-btn" style="border-color: #ff4444; color: #ffaaaa;">Release</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const CONFIG = {
+        maxClones: 15,           // Large Crowd
+        smokeDensity: 25,
+        // Clone Placement Physics
+        horizonY: 0.35,          // 35% down the screen is the "horizon" (furthest point)
+        minScale: 0.35,          // Size of furthest clones
+        maxScale: 0.85,          // Size of closest clones (smaller than 1.0 to keep real user dominant)
+    };
+
+    const video = document.getElementById('input_video');
+    const canvas = document.getElementById('output_canvas');
+    const ctx = canvas.getContext('2d');
+    const statusText = document.getElementById('status');
+
+    let currentSegmentation = null;
+    let clones = []; 
+    let particles = [];
+    
+    let width = 1280, height = 720;
+    let liveHelperCanvas = document.createElement('canvas');
+    let liveHelperCtx = liveHelperCanvas.getContext('2d');
+
+    // --- CLONE LOGIC ---
+    class Clone {
+        constructor(image, screenWidth, screenHeight) {
+            this.img = image;
+            
+            // 1. RANDOMIZE DEPTH (Scale)
+            // We want clones mostly in the mid-range, not too tiny, not too huge
+            this.scale = CONFIG.minScale + Math.random() * (CONFIG.maxScale - CONFIG.minScale);
+
+            // 2. POSITIONING X (Surround Logic)
+            // Allow X to go slightly offscreen so they frame the user
+            const padding = screenWidth * 0.2; 
+            this.x = (Math.random() * (screenWidth + padding)) - (padding / 2);
+
+            // 3. POSITIONING Y (Perspective Floor Logic)
+            // Smaller scale (far away) = Higher Y (Horizon)
+            // Larger scale (close) = Lower Y (Bottom)
+            // We calculate where the "feet" land.
+            const scaleFactor = (this.scale - CONFIG.minScale) / (CONFIG.maxScale - CONFIG.minScale);
+            // Interpolate between horizon (top) and bottom (1.0)
+            const feetY = screenHeight * (CONFIG.horizonY + (scaleFactor * (1.0 - CONFIG.horizonY)));
+            
+            this.y = feetY;
+
+            // Animation props
+            this.animOffset = Math.random() * 100;
+            this.opacity = 0;
+        }
+
+        update(time) {
+            // Fade In
+            if(this.opacity < 1) this.opacity += 0.08;
+
+            // Idle Animation (Breathing)
+            this.animY = Math.sin(time * 0.002 + this.animOffset) * 5; 
+            this.animScale = 1 + Math.sin(time * 0.003 + this.animOffset) * 0.01;
+        }
+
+        draw(ctx) {
+            ctx.save();
+            ctx.globalAlpha = this.opacity;
+
+            // Transform Logic:
+            // 1. Move to the target X and Feet Y
+            ctx.translate(this.x, this.y + this.animY);
+            
+            // 2. Apply Scale
+            ctx.scale(this.scale * this.animScale, this.scale * this.animScale);
+
+            // 3. Draw Image
+            // IMPORTANT: We need to draw the image so its BOTTOM CENTER is at (0,0)
+            // The image is width x height. 
+            // X offset: -width/2
+            // Y offset: -height (so the bottom of image is at y=0)
+            // Adjust Y offset slightly because segmentation often cuts off legs.
+            ctx.drawImage(this.img, -width/2, -height + 50); 
+
+            // Shadow on floor
+            ctx.shadowColor = '#000';
+            ctx.shadowBlur = 20;
+            
+            ctx.restore();
+        }
+    }
+
+    // --- PARTICLE SYSTEM ---
+    class SmokeParticle {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.vx = (Math.random() - 0.5) * 15;
+            this.vy = (Math.random() - 1) * 10; // Tend upwards
+            this.life = 1.0;
+            this.size = 10 + Math.random() * 50;
+            this.colorVal = 200 + Math.random() * 55;
+        }
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.vx *= 0.9;
+            this.vy *= 0.9;
+            this.life -= 0.03;
+            this.size += 2;
+        }
+        draw(ctx) {
+            if(this.life <= 0) return;
+            ctx.fillStyle = `rgba(${this.colorVal},${this.colorVal},${this.colorVal}, ${this.life * 0.6})`;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    // --- APP LOGIC ---
+    function spawnClone() {
+        if (!currentSegmentation) return;
+
+        // Snapshot User
+        const cloneCanvas = document.createElement('canvas');
+        cloneCanvas.width = width;
+        cloneCanvas.height = height;
+        const cCtx = cloneCanvas.getContext('2d');
+
+        cCtx.drawImage(currentSegmentation, 0, 0, width, height);
+        cCtx.globalCompositeOperation = 'source-in';
+        cCtx.drawImage(video, 0, 0, width, height);
+        
+        // Add Blue Tint (Chakra)
+        cCtx.globalCompositeOperation = 'source-atop';
+        cCtx.fillStyle = 'rgba(0, 50, 150, 0.2)';
+        cCtx.fillRect(0, 0, width, height);
+
+        // Create Clone Object
+        const newClone = new Clone(cloneCanvas, width, height);
+        clones.push(newClone);
+
+        // Sort by Scale (Painter's Algorithm: Small/Far first, Big/Close last)
+        clones.sort((a, b) => a.scale - b.scale);
+
+        if (clones.length > CONFIG.maxClones) clones.shift();
+
+        // Smoke at feet
+        for(let i=0; i<CONFIG.smokeDensity; i++) {
+            particles.push(new SmokeParticle(newClone.x, newClone.y - 50));
+        }
+        statusText.innerText = `Kage Bunshin: ${clones.length}`;
+    }
+
+    function clearClones() {
+        // Poof effect for all
+        clones.forEach(c => {
+             for(let i=0; i<10; i++) particles.push(new SmokeParticle(c.x, c.y-100));
+        });
+        clones = [];
+        statusText.innerText = "Released.";
+    }
+
+    // --- RENDER LOOP ---
+    function onSegmentationResults(results) {
+        currentSegmentation = results.segmentationMask;
+
+        if (canvas.width !== video.videoWidth) {
+            width = video.videoWidth;
+            height = video.videoHeight;
+            canvas.width = width;
+            canvas.height = height;
+            liveHelperCanvas.width = width;
+            liveHelperCanvas.height = height;
+        }
+
+        const time = Date.now();
+
+        // 1. Mirror Context
+        ctx.save();
+        ctx.clearRect(0, 0, width, height);
+        ctx.scale(-1, 1);
+        ctx.translate(-width, 0);
+
+        // 2. Background
+        ctx.drawImage(results.image, 0, 0, width, height);
+        // Vignette / Dimmer to focus on center
+        const grad = ctx.createRadialGradient(width/2, height/2, 300, width/2, height/2, width);
+        grad.addColorStop(0, 'rgba(0,0,0,0.1)');
+        grad.addColorStop(1, 'rgba(0,0,0,0.7)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, width, height);
+
+        // 3. Draw Clones (Sorted Far -> Close)
+        clones.forEach(clone => {
+            clone.update(time);
+            clone.draw(ctx);
+        });
+
+        // 4. Smoke
+        ctx.globalCompositeOperation = 'screen';
+        particles.forEach((p, i) => {
+            p.update();
+            p.draw(ctx);
+            if(p.life <= 0) particles.splice(i, 1);
+        });
+        ctx.globalCompositeOperation = 'source-over';
+
+        // 5. Draw Live User (Foreground)
+        liveHelperCtx.clearRect(0, 0, width, height);
+        liveHelperCtx.drawImage(results.segmentationMask, 0, 0, width, height);
+        liveHelperCtx.globalCompositeOperation = 'source-in';
+        liveHelperCtx.drawImage(results.image, 0, 0, width, height);
+        liveHelperCtx.globalCompositeOperation = 'source-over';
+
+        // Draw Live User with Glow
+        ctx.shadowColor = '#00eaff';
+        ctx.shadowBlur = 15;
+        ctx.drawImage(liveHelperCanvas, 0, 0);
+
+        ctx.restore();
+    }
+
+    // --- INITIALIZATION ---
+    async function init() {
+        // 1. Segmentation (Fast)
+        const selfieSegmentation = new SelfieSegmentation({locateFile: (file) => 
+            `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`});
+        selfieSegmentation.setOptions({ modelSelection: 1 });
+        selfieSegmentation.onResults(onSegmentationResults);
+
+        // 2. Hands (High Accuracy for Distance)
+        const hands = new Hands({locateFile: (file) => 
+            `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1, // HIGH PRECISION MODE (Better for distance)
+            minDetectionConfidence: 0.4, // Lower threshold to detect hands further away
+            minTrackingConfidence: 0.5
+        });
+
+        // Smart Trigger Logic
+        let lastTrigger = 0;
+        hands.onResults((results) => {
+            if(results.multiHandLandmarks && results.multiHandLandmarks.length === 2) {
+                const h1 = results.multiHandLandmarks[0];
+                const h2 = results.multiHandLandmarks[1];
+
+                // Improved Trigger: Center of Chest + Hands Close
+                // Calculate average position of hand 1 and hand 2 (Wrist landmarks)
+                const w1 = h1[0];
+                const w2 = h2[0];
+                
+                // Distance between wrists
+                const dist = Math.hypot(w1.x - w2.x, w1.y - w2.y);
+                
+                // Also check Y position (Hands should be roughly chest/face height, not at waist)
+                const avgY = (w1.y + w2.y) / 2;
+
+                // Threshold: Wrists close (< 0.15) AND Hands not too low (y < 0.9)
+                if(dist < 0.2 && avgY < 0.9) {
+                    const now = Date.now();
+                    if(now - lastTrigger > 250) { // Fast spawn rate (250ms)
+                        spawnClone();
+                        lastTrigger = now;
+                    }
+                }
+            }
+        });
+
+        const camera = new Camera(video, {
+            onFrame: async () => {
+                await selfieSegmentation.send({image: video});
+            },
+            width: 1280,
+            height: 720
+        });
+
+        // Run Hands check at ~10 FPS (High enough for responsiveness, low enough for Perf)
+        setInterval(async () => {
+            if(video.readyState === 4) await hands.send({image: video});
+        }, 100);
+
+        await camera.start();
+        statusText.innerText = "Jutsu Ready. Form Seal (Hands Together).";
+    }
+
+    document.getElementById('spawn-btn').onclick = spawnClone;
+    document.getElementById('clear-btn').onclick = clearClones;
+
+    init();
+</script>
+</body>
+</html>

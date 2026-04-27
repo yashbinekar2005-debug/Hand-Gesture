@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dual-Wield Water Balloon AR</title>
+    
+    <!-- P5.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.min.js"></script>
+    
+    <!-- MediaPipe Hand Tracking -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+    <style>
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: #000; overflow: hidden;
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        /* Mirrors webcam and fills screen */
+        #canvas-container canvas {
+            position: absolute; top: 0; left: 0;
+            width: 100vw !important; height: 100vh !important;
+            object-fit: cover;
+            transform: scaleX(-1); 
+            z-index: 1;
+        }
+
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 10; pointer-events: none; display: flex;
+            flex-direction: column; justify-content: center; align-items: center;
+            color: white; text-shadow: 0px 4px 8px rgba(0,0,0,1);
+        }
+
+        #loading { font-size: 32px; font-weight: bold; text-align: center; }
+        .instructions { 
+            font-size: 24px; margin-top: 15px; color: #fff; 
+            background: rgba(0,0,0,0.6); padding: 15px 30px; border-radius: 12px;
+            border: 2px solid #39FF14; text-align: center;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+
+    <video id="webcam" autoplay playsinline style="display: none;"></video>
+    
+    <div id="ui-layer">
+        <div id="loading">
+            Loading Dual-Hand AR Engine...
+            <div class="instructions">
+                ✊ <b>MAKE A FIST</b> to grab balloons<br>
+                🖐️ <b>OPEN HANDS</b> to smash them at the screen!
+            </div>
+        </div>
+    </div>
+    
+    <div id="canvas-container"></div>
+
+    <script>
+        const videoElement = document.getElementById('webcam');
+        
+        let stainLayer; 
+        let balloons =[];
+        let drips =[]; 
+        let isInitialized = false;
+
+        // MAX INTENSITY VIBRANT COLORS
+        const COLORS = [
+            [255, 0, 100],  // Neon Pink[0, 255, 100],  // Toxic Green[0, 150, 255],  // Bright Blue[255, 200, 0],  // Sunshine Yellow
+            [150, 0, 255]   // Electric Purple
+        ];
+
+        // We use an object to track left and right hands independently
+        let handTrackers = {
+            'Left':  { isHolding: false, color: null, history:[], wasFist: false },
+            'Right': { isHolding: false, color: null, history:[], wasFist: false }
+        };
+
+        // Data to draw in the current frame
+        let currentHandsToDraw =[];
+
+        function setup() {
+            let canvas = createCanvas(1280, 720); 
+            canvas.parent('canvas-container');
+            stainLayer = createGraphics(width, height);
+            
+            // --- MediaPipe Setup (Upgraded to 2 Hands) ---
+            const handsMesh = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+            handsMesh.setOptions({ 
+                maxNumHands: 2, // DETECT BOTH HANDS
+                modelComplexity: 1, 
+                minDetectionConfidence: 0.6, 
+                minTrackingConfidence: 0.6 
+            });
+            
+            handsMesh.onResults(processHands);
+
+            const camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await handsMesh.send({image: videoElement});
+                    if (!isInitialized && videoElement.videoWidth > 0) {
+                        resizeCanvas(videoElement.videoWidth, videoElement.videoHeight);
+                        stainLayer.resizeCanvas(width, height);
+                        document.getElementById('loading').style.display = 'none';
+                        isInitialized = true;
+                    }
+                }, width: 1280, height: 720
+            });
+            camera.start();
+        }
+
+        // AI Callback Function
+        function processHands(results) {
+            currentHandsToDraw =[]; // Clear current frame data
+
+            if (results.multiHandLandmarks && results.multiHandedness) {
+                for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                    let landmarks = results.multiHandLandmarks[i];
+                    // MediaPipe identifies if it's a left or right hand.
+                    // We use this label to manage state for each hand independently.
+                    let handLabel = results.multiHandedness[i].label; 
+                    let tracker = handTrackers[handLabel];
+
+                    let px = landmarks[9].x * width;  // Palm center X
+                    let py = landmarks[9].y * height; // Palm center Y
+
+                    // Track movement history to calculate throw velocity
+                    tracker.history.push({x: px, y: py});
+                    if (tracker.history.length > 5) tracker.history.shift();
+
+                    let isFist = detectFist(landmarks);
+
+                    // --- SIMPLIFIED THROW LOGIC ---
+                    if (isFist && !tracker.wasFist) {
+                        // Action: Just closed hand. GRAB BALLOON.
+                        tracker.isHolding = true;
+                        tracker.color = random(COLORS);
+                    } 
+                    else if (!isFist && tracker.wasFist && tracker.isHolding) {
+                        // Action: Just opened hand. THROW BALLOON!
+                        let vx = 0; let vy = 0;
+                        
+                        // Calculate speed based on recent history
+                        if (tracker.history.length >= 3) {
+                            let oldestPos = tracker.history[0];
+                            vx = (px - oldestPos.x) * 0.4;
+                            vy = (py - oldestPos.y) * 0.4;
+                        }
+
+                        // Constrain velocity so it doesn't glitch off screen
+                        vx = constrain(vx, -50, 50);
+                        vy = constrain(vy, -50, 50);
+
+                        // Spawn the flying balloon
+                        balloons.push(new WaterBalloon(px, py, vx, vy, tracker.color));
+                        tracker.isHolding = false;
+                    }
+
+                    tracker.wasFist = isFist;
+
+                    // Save data so p5.js can draw graphics on top of the hands
+                    currentHandsToDraw.push({
+                        x: px, y: py,
+                        isHolding: tracker.isHolding,
+                        color: tracker.color,
+                        isFist: isFist
+                    });
+                }
+            }
+        }
+
+        // Checks if hand is closed (Fist)
+        function detectFist(landmarks) {
+            let wrist = landmarks[0];
+            let palmBase = landmarks[9];
+            let tips =[8, 12, 16, 20]; // Fingertips
+            
+            let palmSize = dist(wrist.x, wrist.y, palmBase.x, palmBase.y);
+            let closedFingers = 0;
+
+            for (let tip of tips) {
+                // If fingertips are close to the wrist, they are curled in (Fist)
+                let d = dist(landmarks[tip].x, landmarks[tip].y, wrist.x, wrist.y);
+                if (d < palmSize * 1.5) { 
+                    closedFingers++;
+                }
+            }
+            return closedFingers >= 3; // True if 3 or more fingers are curled
+        }
+
+        // --- MAIN DRAW LOOP ---
+        function draw() {
+            if (!isInitialized) return;
+
+            // 1. Draw webcam
+            drawingContext.drawImage(videoElement, 0, 0, width, height);
+
+            // 2. Draw permanent paint splats
+            image(stainLayer, 0, 0);
+
+            // 3. Draw Drips sliding down the screen
+            updateAndDrawDrips();
+
+            // 4. Draw Hand Graphics (Reticles & Held Balloons)
+            for (let hand of currentHandsToDraw) {
+                if (hand.isHolding) {
+                    drawBalloonGraphic(hand.x, hand.y, 110, hand.color);
+                } else {
+                    noFill();
+                    stroke(0, 255, 0, 180);
+                    strokeWeight(4);
+                    circle(hand.x, hand.y, 60); // Empty hand reticle
+                }
+            }
+
+            // 5. Update & Draw flying balloons
+            updateAndDrawBalloons();
+        }
+
+        function drawBalloonGraphic(x, y, size, colorArr) {
+            noStroke();
+            fill(colorArr[0], colorArr[1], colorArr[2], 255);
+            ellipse(x, y + size*0.1, size, size * 1.2); 
+            
+            // Shine Highlight
+            fill(255, 255, 255, 180);
+            ellipse(x - size*0.2, y - size*0.1, size*0.25, size*0.4); 
+
+            // Knot
+            fill(colorArr[0], colorArr[1], colorArr[2], 255);
+            triangle(x, y - size*0.5, x - size*0.15, y - size*0.65, x + size*0.15, y - size*0.65);
+        }
+
+        function updateAndDrawBalloons() {
+            for (let i = balloons.length - 1; i >= 0; i--) {
+                let b = balloons[i];
+                b.update();
+                
+                // Z <= 0 means it hit the camera lens/screen!
+                if (b.z <= 0) {
+                    smashOnScreen(b.x, b.y, b.colorArr);
+                    balloons.splice(i, 1);
+                } else {
+                    b.draw();
+                }
+            }
+        }
+
+        function smashOnScreen(x, y, colorArr) {
+            stainLayer.noStroke();
+            stainLayer.fill(colorArr[0], colorArr[1], colorArr[2], 245); 
+            
+            // Giant Center Splat
+            let coreSize = random(180, 300);
+            stainLayer.circle(x, y, coreSize);
+            
+            // Explosive Splashes outward
+            for(let i = 0; i < 25; i++) {
+                let angle = random(TWO_PI);
+                let dist = random(coreSize * 0.4, coreSize * 1.5);
+                let dropSize = random(10, 50);
+                
+                let ox = x + cos(angle) * dist;
+                let oy = y + sin(angle) * dist;
+                
+                stainLayer.circle(ox, oy, dropSize);
+                
+                // Connection streaks
+                stainLayer.strokeWeight(dropSize * 0.6);
+                stainLayer.stroke(colorArr[0], colorArr[1], colorArr[2], 245);
+                stainLayer.line(x, y, ox, oy);
+                stainLayer.noStroke();
+            }
+
+            // Spawn sliding drips
+            for(let i = 0; i < 6; i++) {
+                let dx = x + random(-coreSize*0.4, coreSize*0.4);
+                let dy = y + random(0, coreSize*0.5); 
+                drips.push(new PaintDrip(dx, dy, colorArr));
+            }
+        }
+
+        function updateAndDrawDrips() {
+            for(let i = drips.length - 1; i >= 0; i--) {
+                let d = drips[i];
+                d.update();
+                if(d.isDead()) {
+                    drips.splice(i, 1);
+                }
+            }
+        }
+
+        // --- CLASSES ---
+
+        class WaterBalloon {
+            constructor(x, y, vx, vy, colorArr) {
+                this.x = x;
+                this.y = y;
+                this.z = 800; 
+                
+                this.vx = vx + random(-5, 5); // Add slight scatter
+                this.vy = vy + random(-5, 0);
+                this.vz = -65; // High speed towards the screen
+                
+                this.gravity = 0.5;
+                this.colorArr = colorArr;
+                this.baseSize = 100; 
+                this.history =[];
+            }
+
+            update() {
+                this.history.push({x: this.x, y: this.y, z: this.z});
+                if (this.history.length > 8) this.history.shift();
+
+                this.x += this.vx;
+                this.y += this.vy;
+                this.z += this.vz;
+                this.vy += this.gravity; 
+            }
+
+            draw() {
+                let scaleFactor = 800 / (800 + this.z); 
+                let currentSize = this.baseSize * scaleFactor;
+
+                // Motion trail
+                noStroke();
+                for (let i = 0; i < this.history.length; i++) {
+                    let pos = this.history[i];
+                    let trailScale = 800 / (800 + pos.z);
+                    let alpha = map(i, 0, this.history.length, 0, 150);
+                    fill(this.colorArr[0], this.colorArr[1], this.colorArr[2], alpha);
+                    circle(pos.x, pos.y, currentSize * 0.8 * trailScale);
+                }
+
+                drawBalloonGraphic(this.x, this.y, currentSize, this.colorArr);
+            }
+        }
+
+        class PaintDrip {
+            constructor(x, y, colorArr) {
+                this.x = x;
+                this.y = y;
+                this.colorArr = colorArr;
+                this.size = random(15, 30);
+                this.speed = random(2, 6);
+            }
+
+            update() {
+                this.y += this.speed;
+                this.x += random(-1, 1); // Wobble left/right
+                this.size -= random(0.1, 0.4); // Thin out over time
+
+                stainLayer.noStroke();
+                stainLayer.fill(this.colorArr[0], this.colorArr[1], this.colorArr[2], 200);
+                stainLayer.circle(this.x, this.y, this.size);
+            }
+
+            isDead() { return this.size <= 0; }
+        }
+    </script>
+</body>
+</html>

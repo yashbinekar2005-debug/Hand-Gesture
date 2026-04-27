@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gesture Controlled Solar System</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; color: white; font-family: 'Segoe UI', sans-serif; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
+        
+        /* UI Layer */
+        #ui-layer { position: absolute; z-index: 10; width: 100%; height: 100%; pointer-events: none; }
+        
+        /* Webcam Feed (Hidden for processing) */
+        .input_video { position: absolute; bottom: 0; right: 0; width: 1px; height: 1px; opacity: 0; }
+        
+        /* Gesture Guide Card */
+        .glass-panel {
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            pointer-events: auto;
+        }
+
+        .active-gesture { color: #4ade80; text-shadow: 0 0 10px #4ade80; }
+        
+        #loader {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #050505; z-index: 50; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; transition: opacity 0.5s;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Loading Screen -->
+    <div id="loader">
+        <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-blue-500 mb-4"></div>
+        <h2 class="text-2xl font-light tracking-widest text-blue-400">INITIALIZING</h2>
+        <p class="text-gray-500 text-sm mt-2">Loading AI Models & 3D Assets...</p>
+    </div>
+
+    <!-- Hidden Video for AI -->
+    <video class="input_video"></video>
+
+    <!-- UI Overlay -->
+    <div id="ui-layer" class="flex flex-col justify-between p-6">
+        
+        <!-- Header -->
+        <div class="w-full text-center mt-8">
+            <h1 id="focus-label" class="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-300 to-purple-500 drop-shadow-[0_0_15px_rgba(100,100,255,0.5)] tracking-widest uppercase transition-all duration-300">
+                SOLAR SYSTEM
+            </h1>
+            <p id="status-text" class="text-sm text-blue-200 mt-2 font-mono tracking-wider">OVERVIEW MODE</p>
+        </div>
+
+        <!-- Gesture Guide -->
+        <div class="self-end glass-panel p-5 w-80 mb-4">
+            <h3 class="text-xs font-bold text-gray-400 uppercase mb-3 border-b border-gray-600 pb-2">Control Module</h3>
+            
+            <ul class="space-y-3 text-sm text-gray-300">
+                <li id="g-next" class="flex justify-between items-center">
+                    <span>🖐️ One Open Palm</span> <span class="text-xs text-gray-500">Next Planet</span>
+                </li>
+                <li id="g-zoom-max" class="flex justify-between items-center">
+                    <span>🙌 Two Open Palms</span> <span class="text-xs text-gray-500">Max Zoom</span>
+                </li>
+                <li id="g-fast" class="flex justify-between items-center">
+                    <span>✊ Closed Fist</span> <span class="text-xs text-gray-500">Fast Speed</span>
+                </li>
+                <li id="g-reset" class="flex justify-between items-center">
+                    <span>✌️ Peace Sign</span> <span class="text-xs text-gray-500">Normal/Reset</span>
+                </li>
+                <li id="g-none" class="flex justify-between items-center">
+                    <span>🚫 No Hands</span> <span class="text-xs text-gray-500">Overview Mode</span>
+                </li>
+            </ul>
+            
+            <div class="mt-4 pt-2 border-t border-gray-600 text-[10px] text-gray-500 font-mono">
+                DETECTED: <span id="debug-gesture" class="text-white font-bold">NONE</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3D Canvas -->
+    <div id="canvas-container"></div>
+
+    <script>
+        /**
+         * APPLICATION STATE
+         */
+        const state = {
+            mode: 'OVERVIEW', // 'OVERVIEW' | 'FOCUS'
+            currentPlanetIndex: 0, // 0=Earth, 1=Mars, 2=Jupiter, 3=Saturn
+            zoomLevel: 'NORMAL', // 'NORMAL' | 'MAX'
+            speedMultiplier: 1.0,
+            lastGestureTime: 0,
+            debounceDelay: 1000, // ms
+            targetCameraPos: new THREE.Vector3(),
+            currentLookAt: new THREE.Vector3()
+        };
+
+        const config = {
+            overviewPos: new THREE.Vector3(0, 150, 200),
+            camSmoothness: 0.05
+        };
+
+        /**
+         * THREE.JS SETUP
+         */
+        let scene, camera, renderer, sun;
+        let planets = [];
+        let orbitLines = [];
+        let stars;
+
+        function initThreeJS() {
+            const container = document.getElementById('canvas-container');
+            
+            // Scene
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x000000, 0.0015);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.copy(config.overviewPos);
+            camera.lookAt(0, 0, 0);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x333333);
+            scene.add(ambientLight);
+            
+            const sunLight = new THREE.PointLight(0xffffff, 2, 400);
+            scene.add(sunLight);
+
+            createSolarSystem();
+            animate();
+        }
+
+        function createSolarSystem() {
+            // 1. Sun
+            const sunGeo = new THREE.SphereGeometry(10, 64, 64);
+            const sunMat = new THREE.MeshBasicMaterial({ color: 0xFFD700 });
+            sun = new THREE.Mesh(sunGeo, sunMat);
+            // Sun Glow
+            const glowGeo = new THREE.SphereGeometry(11, 64, 64);
+            const glowMat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.3, side: THREE.BackSide });
+            sun.add(new THREE.Mesh(glowGeo, glowMat));
+            scene.add(sun);
+
+            // 2. Planets Data
+            const planetData = [
+                { name: "EARTH", size: 2.5, dist: 40, color: 0x2233ff, speed: 0.005 },
+                { name: "MARS", size: 2.0, dist: 60, color: 0xff4500, speed: 0.004 },
+                { name: "JUPITER", size: 6.0, dist: 90, color: 0xd8ca9d, speed: 0.002 },
+                { name: "SATURN", size: 5.0, dist: 130, color: 0xc5a16f, speed: 0.0015, ring: true }
+            ];
+
+            planetData.forEach((p, i) => {
+                // Pivot group for orbit
+                const pivot = new THREE.Group();
+                scene.add(pivot);
+
+                // Planet Mesh
+                const geo = new THREE.SphereGeometry(p.size, 32, 32);
+                const mat = new THREE.MeshPhongMaterial({ color: p.color, shininess: 10 });
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.position.set(p.dist, 0, 0); // Offset X
+                pivot.add(mesh);
+
+                // Saturn Ring
+                if (p.ring) {
+                    const ringGeo = new THREE.RingGeometry(p.size * 1.4, p.size * 2.2, 32);
+                    const ringMat = new THREE.MeshBasicMaterial({ color: 0x998877, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
+                    const ring = new THREE.Mesh(ringGeo, ringMat);
+                    ring.rotation.x = Math.PI / 2;
+                    mesh.add(ring);
+                }
+
+                // Orbit Trail
+                const trailGeo = new THREE.RingGeometry(p.dist - 0.2, p.dist + 0.2, 128);
+                const trailMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.15 });
+                const trail = new THREE.Mesh(trailGeo, trailMat);
+                trail.rotation.x = Math.PI / 2;
+                scene.add(trail);
+
+                planets.push({
+                    mesh: mesh,
+                    pivot: pivot,
+                    data: p,
+                    angle: Math.random() * Math.PI * 2
+                });
+            });
+
+            // 3. Stars
+            const starGeo = new THREE.BufferGeometry();
+            const starCount = 5000;
+            const posArray = new Float32Array(starCount * 3);
+            for(let i=0; i<starCount*3; i++) {
+                posArray[i] = (Math.random() - 0.5) * 800;
+            }
+            starGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+            const starMat = new THREE.PointsMaterial({ size: 0.5, color: 0xffffff });
+            stars = new THREE.Points(starGeo, starMat);
+            scene.add(stars);
+        }
+
+        // Animation Loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Orbit Logic
+            planets.forEach(p => {
+                // Rotate planet on axis
+                p.mesh.rotation.y += 0.01;
+                // Orbit around sun (Pivot rotation)
+                p.pivot.rotation.y += p.data.speed * state.speedMultiplier;
+            });
+
+            // Camera Logic
+            updateCamera();
+
+            renderer.render(scene, camera);
+        }
+
+        function updateCamera() {
+            let targetPos, lookAtPos;
+
+            if (state.mode === 'OVERVIEW') {
+                // Gesture 5 Logic: View whole system
+                targetPos = config.overviewPos;
+                lookAtPos = new THREE.Vector3(0, 0, 0);
+            } else {
+                // Focus on specific planet
+                const currentPlanet = planets[state.currentPlanetIndex];
+                
+                // Get absolute world position of planet
+                const planetWorldPos = new THREE.Vector3();
+                currentPlanet.mesh.getWorldPosition(planetWorldPos);
+                
+                lookAtPos = planetWorldPos.clone();
+
+                // Determine Distance based on Zoom Gesture
+                let dist = currentPlanet.data.size * 4 + 10; // Default distance
+                let height = currentPlanet.data.size + 2;
+
+                if (state.zoomLevel === 'MAX') {
+                    // Gesture 4: Max zoom
+                    dist = currentPlanet.data.size * 2; 
+                    height = 0;
+                }
+
+                // Calculate camera position relative to planet orbit
+                // We want the camera 'behind' and 'above' the planet relative to its movement
+                const angle = currentPlanet.pivot.rotation.y;
+                const offsetX = Math.sin(angle) * dist; 
+                const offsetZ = Math.cos(angle) * dist;
+
+                targetPos = new THREE.Vector3(
+                    planetWorldPos.x + offsetX,
+                    planetWorldPos.y + height + 5,
+                    planetWorldPos.z + offsetZ
+                );
+            }
+
+            // Smooth Transitions
+            camera.position.lerp(targetPos, config.camSmoothness);
+            
+            // Smooth LookAt
+            state.currentLookAt.lerp(lookAtPos, config.camSmoothness);
+            camera.lookAt(state.currentLookAt);
+        }
+
+        /**
+         * MEDIAPIPE GESTURE LOGIC
+         */
+        
+        function onResults(results) {
+            // Hide Loader
+            const loader = document.getElementById('loader');
+            if (loader.style.opacity !== '0') {
+                loader.style.opacity = '0';
+                setTimeout(() => loader.style.display = 'none', 500);
+            }
+
+            const multiHandLandmarks = results.multiHandLandmarks;
+            let detectedGesture = "NONE";
+
+            // 1. Logic for NO HANDS (Gesture 5)
+            if (!multiHandLandmarks || multiHandLandmarks.length === 0) {
+                detectedGesture = "NONE";
+                state.mode = 'OVERVIEW';
+                state.speedMultiplier = 1.0;
+                updateUI(detectedGesture);
+                return;
+            }
+
+            // 2. Logic for TWO HANDS (Gesture 4)
+            if (multiHandLandmarks.length === 2) {
+                const hand1 = analyzeHand(multiHandLandmarks[0]);
+                const hand2 = analyzeHand(multiHandLandmarks[1]);
+                
+                if (hand1 === 'OPEN_PALM' && hand2 === 'OPEN_PALM') {
+                    detectedGesture = "TWO_PALMS";
+                    state.mode = 'FOCUS'; // Ensure we focus to zoom
+                    state.zoomLevel = 'MAX';
+                }
+            } 
+            // 3. Logic for ONE HAND
+            else if (multiHandLandmarks.length === 1) {
+                const handShape = analyzeHand(multiHandLandmarks[0]);
+                
+                state.mode = 'FOCUS'; // Any single hand gesture activates focus mode
+
+                if (handShape === 'OPEN_PALM') {
+                    detectedGesture = "OPEN_PALM";
+                    // Cycle Planet (Debounced)
+                    const now = Date.now();
+                    if (now - state.lastGestureTime > state.debounceDelay) {
+                        state.currentPlanetIndex = (state.currentPlanetIndex + 1) % planets.length;
+                        state.lastGestureTime = now;
+                        // Reset zoom when switching
+                        state.zoomLevel = 'NORMAL'; 
+                    }
+                } 
+                else if (handShape === 'CLOSED_FIST') {
+                    detectedGesture = "CLOSED_FIST";
+                    state.speedMultiplier = 4.0; // Fast spin
+                    state.zoomLevel = 'NORMAL'; 
+                } 
+                else if (handShape === 'PEACE') {
+                    detectedGesture = "PEACE";
+                    state.speedMultiplier = 1.0; // Reset Speed
+                    state.zoomLevel = 'NORMAL'; // Reset Zoom
+                }
+            }
+
+            // If not holding fist, reset speed (unless logic specifically dictates otherwise)
+            if (detectedGesture !== "CLOSED_FIST") {
+                state.speedMultiplier = 1.0;
+            }
+
+            updateUI(detectedGesture);
+        }
+
+        function analyzeHand(landmarks) {
+            // Helper to check finger extension
+            // Tip indices: 4(Thumb), 8(Index), 12(Middle), 16(Ring), 20(Pinky)
+            // PIP indices (knuckles): 2, 6, 10, 14, 18
+            const isExtended = (tip, pip) => {
+                const wrist = landmarks[0];
+                const dTip = Math.hypot(landmarks[tip].x - wrist.x, landmarks[tip].y - wrist.y);
+                const dPip = Math.hypot(landmarks[pip].x - wrist.x, landmarks[pip].y - wrist.y);
+                return dTip > dPip; // Simple distance heuristic
+            };
+
+            const thumb = isExtended(4, 2);
+            const index = isExtended(8, 6);
+            const middle = isExtended(12, 10);
+            const ring = isExtended(16, 14);
+            const pinky = isExtended(20, 18);
+
+            const fingersOpen = [thumb, index, middle, ring, pinky].filter(Boolean).length;
+
+            if (fingersOpen === 5) return 'OPEN_PALM';
+            if (fingersOpen === 0) return 'CLOSED_FIST';
+            if (index && middle && !ring && !pinky) return 'PEACE';
+            
+            return 'UNKNOWN';
+        }
+
+        /**
+         * UI UPDATES
+         */
+        function updateUI(gesture) {
+            const planetName = planets[state.currentPlanetIndex].data.name;
+            const mainLabel = document.getElementById('focus-label');
+            const subLabel = document.getElementById('status-text');
+            const debugLabel = document.getElementById('debug-gesture');
+
+            debugLabel.innerText = gesture;
+
+            // Highlight Guide
+            ['g-next', 'g-zoom-max', 'g-fast', 'g-reset', 'g-none'].forEach(id => {
+                document.getElementById(id).classList.remove('active-gesture');
+            });
+
+            if (gesture === "OPEN_PALM") document.getElementById('g-next').classList.add('active-gesture');
+            if (gesture === "TWO_PALMS") document.getElementById('g-zoom-max').classList.add('active-gesture');
+            if (gesture === "CLOSED_FIST") document.getElementById('g-fast').classList.add('active-gesture');
+            if (gesture === "PEACE") document.getElementById('g-reset').classList.add('active-gesture');
+            if (gesture === "NONE") document.getElementById('g-none').classList.add('active-gesture');
+
+            // Main Labels
+            if (state.mode === 'OVERVIEW') {
+                mainLabel.innerText = "SOLAR SYSTEM";
+                subLabel.innerText = "OVERVIEW MODE (RAISE HAND TO CONTROL)";
+            } else {
+                mainLabel.innerText = planetName;
+                if (state.zoomLevel === 'MAX') subLabel.innerText = "MAXIMUM ZOOM";
+                else if (state.speedMultiplier > 1) subLabel.innerText = "TURBO SPEED";
+                else subLabel.innerText = "ORBITING";
+            }
+        }
+
+        /**
+         * INITIALIZATION
+         */
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        initThreeJS();
+
+        // MediaPipe Init
+        const videoElement = document.querySelector('.input_video');
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+
+        hands.setOptions({
+            maxNumHands: 2, // Required for two-handed gestures
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+
+        hands.onResults(onResults);
+
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+        
+        cameraUtils.start();
+
+    </script>
+</body>
+</html>

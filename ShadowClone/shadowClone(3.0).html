@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shadow Clone Jutsu: Live Sync</title>
+    
+    <!-- MediaPipe Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+            font-family: 'Segoe UI', sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        #container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #input_video { display: none; }
+
+        /* HUD Styling */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 30px;
+            box-sizing: border-box;
+            background: radial-gradient(circle, transparent 60%, #000 100%);
+        }
+
+        h1 {
+            color: #fff;
+            text-transform: uppercase;
+            letter-spacing: 5px;
+            text-align: center;
+            text-shadow: 0 0 20px #00aaff;
+            font-size: 1.8rem;
+            margin-top: 10px;
+            opacity: 0.9;
+        }
+
+        .instructions {
+            text-align: center;
+            color: #ccc;
+            font-size: 1rem;
+            margin-top: -10px;
+            text-shadow: 0 0 5px black;
+        }
+
+        #controls {
+            pointer-events: auto;
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            width: 100%;
+            margin-bottom: 20px;
+        }
+
+        button {
+            background: rgba(0, 100, 255, 0.2);
+            border: 1px solid #00aaff;
+            color: #fff;
+            padding: 15px 40px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+            border-radius: 4px;
+            transition: 0.2s;
+        }
+
+        button:hover { background: #00aaff; color: black; }
+        button:active { transform: scale(0.95); }
+
+        #status {
+            color: #00eaff;
+            font-size: 1.2rem;
+            font-weight: bold;
+            text-align: center;
+            text-shadow: 0 0 10px #00aaff;
+        }
+
+        .key-guide {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            color: #aaa;
+            font-size: 0.9rem;
+            margin-bottom: 10px;
+        }
+        .key-item span {
+            color: #fff;
+            font-weight: bold;
+            display: block;
+            font-size: 1.2rem;
+        }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <video id="input_video"></video>
+    <canvas id="output_canvas"></canvas>
+    
+    <div id="ui-layer">
+        <div>
+            <h1>Multi-Shadow Clone Jutsu</h1>
+            <p class="instructions">Synced Action Mode</p>
+        </div>
+        
+        <div id="status">Loading Sensory Modules...</div>
+
+        <div>
+            <div class="key-guide">
+                <div class="key-item"><span>🙏 HANDS TOGETHER</span>Spawn Clone</div>
+                <div class="key-item"><span>🙌 HANDS UP</span>Release All</div>
+            </div>
+            <div id="controls">
+                <button id="spawn-btn">Force Spawn</button>
+                <button id="clear-btn" style="border-color: #ff4444; color: #ffaaaa;">Force Release</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    /**
+     * SHADOW CLONE JUTSU: SYNCED ACTION EDITION
+     * 
+     * Core Upgrades:
+     * 1. Live Mirroring: Clones render the 'Live User Canvas' every frame.
+     * 2. Gesture Release: High hands (Y < threshold) clears array.
+     * 3. Color Grading: 'filter' property used to boost realism.
+     */
+
+    // --- CONFIGURATION ---
+    const CONFIG = {
+        maxClones: 12,
+        smokeDensity: 15,
+        // Clone Placement
+        horizonY: 0.30,         // Horizon line (0.0 top, 1.0 bottom)
+        minScale: 0.35,         // Furthest clone size
+        maxScale: 0.90,         // Closest clone size
+        // Gestures
+        spawnCooldown: 300,     // ms between spawns
+        releaseThreshold: 0.2   // Y-coordinate (Top 20% of screen) for "Hands Up"
+    };
+
+    // --- STATE ---
+    const video = document.getElementById('input_video');
+    const canvas = document.getElementById('output_canvas');
+    const ctx = canvas.getContext('2d');
+    const statusText = document.getElementById('status');
+
+    let currentSegmentation = null;
+    let clones = []; 
+    let particles = [];
+    
+    let width = 1280, height = 720;
+    
+    // The "Master Cutout" - The user extracted from background, refreshed every frame
+    let liveUserCanvas = document.createElement('canvas');
+    let liveUserCtx = liveUserCanvas.getContext('2d');
+
+    // --- PARTICLE SYSTEM (SMOKE) ---
+    class SmokeParticle {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.vx = (Math.random() - 0.5) * 12;
+            this.vy = (Math.random() - 1) * 8; 
+            this.life = 1.0;
+            this.size = 10 + Math.random() * 40;
+            this.colorVal = 220 + Math.random() * 35; // White/Grey
+        }
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.vx *= 0.9;
+            this.vy *= 0.9;
+            this.life -= 0.04;
+            this.size += 1.5;
+        }
+        draw(ctx) {
+            if(this.life <= 0) return;
+            ctx.fillStyle = `rgba(${this.colorVal},${this.colorVal},${this.colorVal}, ${this.life * 0.5})`;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    // --- CLONE CLASS (LIVE SYNC) ---
+    class Clone {
+        constructor(screenWidth, screenHeight) {
+            // Random Scale (Depth)
+            this.scale = CONFIG.minScale + Math.random() * (CONFIG.maxScale - CONFIG.minScale);
+            
+            // Random X Position (Surrounding)
+            const padding = screenWidth * 0.3;
+            this.x = (Math.random() * (screenWidth + padding)) - (padding/2);
+
+            // Calculated Y Position (Floor Perspective)
+            const scaleFactor = (this.scale - CONFIG.minScale) / (CONFIG.maxScale - CONFIG.minScale);
+            this.y = screenHeight * (CONFIG.horizonY + (scaleFactor * (1.0 - CONFIG.horizonY)));
+
+            this.opacity = 0;
+            this.isSpawning = true;
+        }
+
+        update() {
+            if (this.opacity < 1) this.opacity += 0.1;
+        }
+
+        draw(ctx, liveImage) {
+            ctx.save();
+            ctx.globalAlpha = this.opacity;
+
+            // 1. Position & Scale
+            // We want the feet (bottom of image) to land on this.y
+            ctx.translate(this.x, this.y);
+            ctx.scale(this.scale, this.scale);
+
+            // 2. Draw the LIVE user image
+            // Since `liveImage` is the full screen cutout, we draw it 
+            // offset so the bottom-center is at (0,0) of the translate
+            ctx.drawImage(liveImage, -width/2, -height + 50);
+
+            // 3. Realistic Shadow / Glow (Subtle)
+            // No blue tint on body, just a rim light
+            ctx.shadowColor = 'rgba(0,0,0,0.8)'; // Ground shadow
+            ctx.shadowBlur = 0;
+            
+            ctx.restore();
+        }
+    }
+
+    // --- CORE ACTIONS ---
+    function spawnClone() {
+        if (!currentSegmentation) return;
+
+        // Create new clone instance
+        const newClone = new Clone(width, height);
+        clones.push(newClone);
+
+        // Sort: Smallest (furthest) first, Largest (closest) last
+        clones.sort((a, b) => a.scale - b.scale);
+
+        // Cap limit
+        if (clones.length > CONFIG.maxClones) clones.shift();
+
+        // Smoke Effect
+        for(let i=0; i<CONFIG.smokeDensity; i++) {
+            particles.push(new SmokeParticle(newClone.x, newClone.y - 50));
+        }
+
+        statusText.innerText = `Clones Active: ${clones.length}`;
+        statusText.style.color = "#00eaff";
+    }
+
+    function releaseClones() {
+        if(clones.length === 0) return;
+
+        // Visual Flare
+        clones.forEach(c => {
+             for(let i=0; i<8; i++) particles.push(new SmokeParticle(c.x, c.y - 100));
+        });
+        
+        clones = []; // Empty array
+        statusText.innerText = "Jutsu Released";
+        statusText.style.color = "#ffaa00";
+    }
+
+    // --- RENDER PIPELINE ---
+    function onSegmentationResults(results) {
+        currentSegmentation = results.segmentationMask;
+
+        // Update Resolutions
+        if (canvas.width !== video.videoWidth) {
+            width = video.videoWidth;
+            height = video.videoHeight;
+            canvas.width = width;
+            canvas.height = height;
+            liveUserCanvas.width = width;
+            liveUserCanvas.height = height;
+        }
+
+        // STEP 1: PREPARE MASTER CUTOUT (The "Real" User)
+        // We do this ONCE per frame to save performance.
+        // This cutout is then reused for every clone.
+        liveUserCtx.clearRect(0, 0, width, height);
+        
+        // A. Draw Mask
+        liveUserCtx.drawImage(results.segmentationMask, 0, 0, width, height);
+        
+        // B. Composite Video
+        liveUserCtx.globalCompositeOperation = 'source-in';
+        
+        // **COLOR GRADING for REALISM**
+        // Boost saturation and contrast slightly so skin looks alive
+        liveUserCtx.filter = 'contrast(1.1) saturate(1.2)';
+        liveUserCtx.drawImage(results.image, 0, 0, width, height);
+        liveUserCtx.filter = 'none'; // Reset
+        liveUserCtx.globalCompositeOperation = 'source-over';
+
+        // STEP 2: RENDER SCENE
+        ctx.save();
+        ctx.clearRect(0, 0, width, height);
+        
+        // Mirroring for AR feel
+        ctx.scale(-1, 1);
+        ctx.translate(-width, 0);
+
+        // A. Background (Video Feed + Dimmer)
+        ctx.drawImage(results.image, 0, 0, width, height);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; // Cinematic darkness
+        ctx.fillRect(0, 0, width, height);
+
+        // B. Draw Clones (Sorted Depth)
+        // They utilize the 'liveUserCanvas' we just created.
+        // This means if you raise your hand, they ALL raise their hand.
+        clones.forEach(clone => {
+            clone.update();
+            clone.draw(ctx, liveUserCanvas);
+        });
+
+        // C. Particles (Smoke)
+        ctx.globalCompositeOperation = 'screen';
+        for (let i = particles.length - 1; i >= 0; i--) {
+            particles[i].update();
+            particles[i].draw(ctx);
+            if(particles[i].life <= 0) particles.splice(i, 1);
+        }
+        ctx.globalCompositeOperation = 'source-over';
+
+        // D. Draw REAL User (Foreground)
+        // Add a slight Rim Light to separate from clones
+        ctx.shadowColor = 'rgba(255, 255, 255, 0.5)';
+        ctx.shadowBlur = 15;
+        ctx.drawImage(liveUserCanvas, 0, 0);
+        
+        ctx.restore();
+    }
+
+    // --- GESTURE & INIT ---
+    async function init() {
+        // Segmentation
+        const selfieSegmentation = new SelfieSegmentation({locateFile: (file) => 
+            `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`});
+        selfieSegmentation.setOptions({ modelSelection: 1 });
+        selfieSegmentation.onResults(onSegmentationResults);
+
+        // Hands
+        const hands = new Hands({locateFile: (file) => 
+            `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5
+        });
+
+        // GESTURE LOGIC
+        let lastSpawnTime = 0;
+
+        hands.onResults((results) => {
+            const now = Date.now();
+            if (!results.multiHandLandmarks) return;
+            const landmarks = results.multiHandLandmarks;
+
+            // 1. RELEASE GESTURE: HANDS UP
+            // Check if any wrist (landmark 0) is very high (y < 0.2)
+            let handsUp = false;
+            for (const hand of landmarks) {
+                if (hand[0].y < CONFIG.releaseThreshold) {
+                    handsUp = true;
+                }
+            }
+            if (handsUp) {
+                releaseClones();
+                return; // Priority over spawn
+            }
+
+            // 2. SPAWN GESTURE: HANDS TOGETHER (Seal)
+            if (landmarks.length === 2) {
+                const h1 = landmarks[0];
+                const h2 = landmarks[1];
+                
+                // Wrist distance
+                const dist = Math.hypot(h1[0].x - h2[0].x, h1[0].y - h2[0].y);
+                const avgY = (h1[0].y + h2[0].y) / 2;
+
+                // Condition: Hands Close + Not too high (to avoid conflict with release)
+                if (dist < 0.2 && avgY > 0.3) {
+                    if (now - lastSpawnTime > CONFIG.spawnCooldown) {
+                        spawnClone();
+                        lastSpawnTime = now;
+                    }
+                }
+            }
+        });
+
+        const camera = new Camera(video, {
+            onFrame: async () => {
+                await selfieSegmentation.send({image: video});
+            },
+            width: 1280,
+            height: 720
+        });
+
+        // Run Hands Loop (10 FPS)
+        setInterval(async () => {
+            if(video.readyState === 4) await hands.send({image: video});
+        }, 100);
+
+        await camera.start();
+        statusText.innerText = "Jutsu Ready";
+    }
+
+    // Manual Overrides
+    document.getElementById('spawn-btn').onclick = spawnClone;
+    document.getElementById('clear-btn').onclick = releaseClones;
+
+    init();
+</script>
+</body>
+</html>

@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A Message From Me</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&family=Montserrat:wght@300;500;700&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            height: 100vh;
+            width: 100%;
+            overflow: hidden;
+            background: linear-gradient(135deg, #2b1055, #7597de);
+            font-family: 'Montserrat', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        /* Glassmorphism Card */
+        .glass-card {
+            width: 90%;
+            max-width: 500px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 25px;
+            padding: 40px;
+            text-align: center;
+            color: white;
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+            z-index: 10;
+            transition: all 0.8s ease;
+        }
+
+        /* The Sorry Animation (Sad Face) */
+        .emoji-container {
+            font-size: 5rem;
+            margin-bottom: 20px;
+            display: inline-block;
+            animation: floatSad 3s ease-in-out infinite;
+            filter: drop-shadow(0 0 10px rgba(255,255,255,0.3));
+        }
+
+        /* Typography */
+        h1 {
+            font-family: 'Dancing Script', cursive;
+            font-size: 2.8rem;
+            background: linear-gradient(to right, #ff9a9e, #fecfef);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 15px;
+            min-height: 50px;
+        }
+
+        p {
+            font-size: 1.1rem;
+            line-height: 1.6;
+            margin-bottom: 30px;
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        /* The Button */
+        .btn-open {
+            padding: 15px 45px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: white;
+            background: linear-gradient(45deg, #ff758c, #ff7eb3);
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(255, 117, 140, 0.4);
+            transition: transform 0.3s, box-shadow 0.3s;
+            outline: none;
+        }
+
+        .btn-open:hover {
+            transform: scale(1.05);
+            box-shadow: 0 8px 25px rgba(255, 117, 140, 0.6);
+        }
+
+        /* Hidden Celebration State */
+        .celebration-content {
+            display: none;
+            animation: fadeIn 2s ease;
+        }
+
+        .wish-text {
+            font-size: 3.5rem;
+            font-family: 'Dancing Script', cursive;
+            color: #ff69b4; /* Pink */
+            text-shadow: 0 0 10px rgba(255, 105, 180, 0.8);
+            margin-bottom: 10px;
+        }
+
+        .sub-wish {
+            font-size: 1.2rem;
+            color: white;
+        }
+
+        /* Animations */
+        @keyframes floatSad {
+            0%, 100% { transform: translateY(0) rotate(0deg); }
+            50% { transform: translateY(-10px) rotate(-5deg); }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Lotus Styling */
+        .lotus {
+            position: absolute;
+            top: -100px;
+            z-index: 1;
+            opacity: 0.9;
+            filter: drop-shadow(0 0 10px rgba(255, 105, 180, 0.6));
+            animation-name: fall;
+            animation-timing-function: linear;
+            pointer-events: none; /* Let clicks pass through */
+        }
+
+        /* Keyframes for falling */
+        @keyframes fall {
+            0% {
+                transform: translateY(-100px) rotate(0deg) translateX(0px);
+                opacity: 0;
+            }
+            10% {
+                opacity: 1;
+            }
+            100% {
+                transform: translateY(110vh) rotate(360deg) translateX(50px);
+                opacity: 0.8;
+            }
+        }
+
+    </style>
+</head>
+<body>
+
+    <!-- Background Music -->
+    <!-- Note: Replace the src with your own MP3 file if you have one -->
+    <audio id="bgMusic" loop>
+        <source src="https://cdn.pixabay.com/audio/2022/10/05/audio_68630b9534.mp3" type="audio/mpeg">
+    </audio>
+
+    <div class="glass-card" id="mainCard">
+        
+        <!-- Apology State -->
+        <div id="apologyState">
+            <div class="emoji-container" id="sadFace">🥺</div>
+            <h1 id="typewriter"></h1>
+            <p class="fade-in-text">
+                I know I'm late, and I feel terrible about it.<br>
+                The year changed, but our friendship didn't.<br>
+                Please accept my apology and this little surprise?
+            </p>
+            <button class="btn-open" onclick="openNextPage()">
+                Accept my surprise? & Open Gift 🎁
+            </button>
+        </div>
+
+        <!-- Celebration State -->
+        <div class="celebration-content" id="celebrationState">
+            <div class="emoji-container" style="font-size: 6rem;">🥰</div>
+            <div class="wish-text">Happy New Year!</div>
+            <p class="sub-wish">May your year be as beautiful and bright as these flowers.</p>
+            <p style="font-size: 0.9rem; margin-top: 20px; color: #ddd;">(Playing Song...)</p>
+        </div>
+
+    </div>
+    <script>
+    function openNextPage() {
+        window.location.href = "soory.html"; 
+        // change this to your actual page name or URL
+    }
+</script>
+
+
+    <!-- <script>
+        // 1. Typewriter Effect
+        const text = "I am so sorry...";
+        const heading = document.getElementById('typewriter');
+        let i = 0;
+
+        function typeWriter() {
+            if (i < text.length) {
+                heading.innerHTML += text.charAt(i);
+                i++;
+                setTimeout(typeWriter, 150);
+            }
+        }
+        window.onload = typeWriter;
+
+        // 2. Open Gift Function
+        function openGift() {
+            // UI Transition
+            const apology = document.getElementById('apologyState');
+            const celebration = document.getElementById('celebrationState');
+            const music = document.getElementById('bgMusic');
+
+            apology.style.display = 'none';
+            celebration.style.display = 'block';
+
+            // Play Music
+            // Browsers require interaction to play audio, so this works perfect on button click
+            music.volume = 0.5;
+            music.play().catch(error => {
+                console.log("Audio play failed (browser policy): ", error);
+            });
+
+            // Start Lotus Shower
+            startLotusShower();
+        }
+
+        // 3. The Bright Pink Lotus Engine
+        function startLotusShower() {
+            // Create a lotus every 800ms for a slow, gentle feel
+            setInterval(createLotus, 800);
+        }
+
+        // SVG for a Pink Lotus
+        const lotusSVG = `
+            <svg viewBox="0 0 100 100" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+                <path fill="#FF1493" d="M50 20 C50 20 60 40 50 60 C40 40 50 20 50 20 Z" opacity="0.9"/>
+                <path fill="#FF69B4" d="M50 60 C50 60 70 45 80 30 C70 55 50 60 50 60 Z" />
+                <path fill="#FF69B4" d="M50 60 C50 60 30 45 20 30 C30 55 50 60 50 60 Z" />
+                <path fill="#FFB6C1" d="M50 60 C50 60 85 65 90 50 C80 75 50 60 50 60 Z" />
+                <path fill="#FFB6C1" d="M50 60 C50 60 15 65 10 50 C20 75 50 60 50 60 Z" />
+                <circle cx="50" cy="55" r="5" fill="#FFFFE0" />
+            </svg>
+        `;
+
+        function createLotus() {
+            const lotus = document.createElement('div');
+            lotus.classList.add('lotus');
+            lotus.innerHTML = lotusSVG;
+
+            // Randomize Size (between 40px and 80px for visibility)
+            const size = Math.random() * 40 + 40; 
+            lotus.style.width = `${size}px`;
+            lotus.style.height = `${size}px`;
+
+            // Random Horizontal Position
+            lotus.style.left = Math.random() * 100 + 'vw';
+
+            // Slow Motion Physics
+            // Duration between 8s and 15s (Very Slow)
+            const duration = Math.random() * 7 + 8; 
+            lotus.style.animationDuration = `${duration}s`;
+
+            document.body.appendChild(lotus);
+
+            // Cleanup to keep browser light
+            setTimeout(() => {
+                lotus.remove();
+            }, duration * 1000);
+        }
+    </script> -->
+</body>
+</html>

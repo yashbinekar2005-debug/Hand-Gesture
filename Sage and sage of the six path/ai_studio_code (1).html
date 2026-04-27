@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Senjutsu: Toad Sage Mode</title>
+    
+    <!-- Google Fonts: Ninja/Scroll Aesthetic -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Shojumaru&display=swap" rel="stylesheet">
+
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+    <style>
+        :root {
+            --sage-orange: #ff8c00;
+            --toad-green: #2e4a3d;
+            --scroll-bg: #f4e4bc;
+            --energy-gold: #ffd700;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #111;
+            overflow: hidden;
+            font-family: 'Shojumaru', cursive;
+            color: var(--scroll-bg);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        /* Container for Video and Canvas */
+        #ar-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            background: #000;
+        }
+
+        /* Video is hidden, we draw to canvas */
+        .input_video {
+            display: none;
+        }
+
+        /* The Output Canvas */
+        .output_canvas {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1); /* Mirror effect */
+        }
+
+        /* UI Overlay Layer */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* Let clicks pass through to buttons */
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px;
+            box-sizing: border-box;
+            z-index: 10;
+        }
+
+        /* Header */
+        h1 {
+            font-size: 2rem;
+            text-shadow: 0 0 10px var(--sage-orange), 2px 2px 0px #000;
+            margin: 10px 0;
+            letter-spacing: 2px;
+            text-align: center;
+        }
+
+        /* Controls */
+        #controls {
+            pointer-events: auto;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        button {
+            background: var(--toad-green);
+            color: var(--scroll-bg);
+            border: 2px solid var(--sage-orange);
+            padding: 15px 30px;
+            font-family: 'Shojumaru', cursive;
+            font-size: 1.2rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px rgba(0,0,0,0.7);
+            clip-path: polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%);
+        }
+
+        button:hover {
+            background: var(--sage-orange);
+            color: #000;
+            box-shadow: 0 0 25px var(--sage-orange);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            filter: grayscale(1);
+        }
+
+        /* Progress Bar (The Scroll) */
+        #meditation-status {
+            width: 300px;
+            height: 20px;
+            background: rgba(0,0,0,0.6);
+            border: 2px solid var(--scroll-bg);
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 10px;
+            position: relative;
+        }
+
+        #energy-bar {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, var(--toad-green), var(--sage-orange));
+            transition: width 0.1s linear;
+        }
+
+        #status-text {
+            color: var(--energy-gold);
+            font-size: 1rem;
+            margin-top: 5px;
+            text-shadow: 1px 1px 0 #000;
+        }
+
+        /* Shockwave Animation */
+        @keyframes shockwave {
+            0% { box-shadow: inset 0 0 0 0px var(--sage-orange); }
+            50% { box-shadow: inset 0 0 50px 20px var(--energy-gold); }
+            100% { box-shadow: inset 0 0 0 0px transparent; }
+        }
+
+        .shockwave-active {
+            animation: shockwave 0.5s ease-out;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="ar-container">
+        <video class="input_video"></video>
+        <canvas class="output_canvas"></canvas>
+        
+        <div id="ui-layer">
+            <div>
+                <h1>SENJUTSU: TOAD SAGE MODE</h1>
+            </div>
+            
+            <div id="controls">
+                <div id="status-text">Status: Idle</div>
+                <div id="meditation-status">
+                    <div id="energy-bar"></div>
+                </div>
+                <br>
+                <button id="start-btn" onclick="app.startMeditation()">Gather Nature Energy</button>
+            </div>
+        </div>
+    </div>
+
+<script>
+/**
+ * ------------------------------------------------------------------
+ * CONFIGURATION & CONSTANTS
+ * ------------------------------------------------------------------
+ */
+const FACEMESH_OPTIONS = {
+    maxNumFaces: 1,
+    refineLandmarks: true, // Crucial for Iris tracking
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+};
+
+// Colors
+const COLOR_ORANGE = 'rgba(255, 140, 0, 0.85)'; // Sage Mask
+const COLOR_GOLD = 'rgba(255, 215, 0, 0.6)';     // Iris Glow
+const COLOR_PUPIL = '#000000';                  // Toad Pupil
+const COLOR_PARTICLE = '#FFD700';               // Nature Energy
+
+// Landmark Indices (Approximations for Sage Mask shapes)
+// Right Eye Mask (User's Right)
+const RIGHT_MASK_INDICES = [
+    33, 246, 161, 160, 159, 158, 157, 173, 133, // Eye contour
+    226, 31, 228, 229, 230, 231, 232, 233, 244  // Temple & Cheek extension
+];
+// Left Eye Mask (User's Left)
+const LEFT_MASK_INDICES = [
+    263, 466, 388, 387, 386, 385, 384, 398, 362, // Eye contour
+    446, 261, 448, 449, 450, 451, 452, 453, 464  // Temple & Cheek extension
+];
+
+/**
+ * ------------------------------------------------------------------
+ * PARTICLE SYSTEM (NATURE ENERGY)
+ * ------------------------------------------------------------------
+ */
+class Particle {
+    constructor(canvasWidth, canvasHeight) {
+        this.reset(canvasWidth, canvasHeight);
+    }
+
+    reset(w, h) {
+        // Spawn from random edge
+        const side = Math.floor(Math.random() * 4);
+        if (side === 0) { this.x = Math.random() * w; this.y = -20; } // Top
+        else if (side === 1) { this.x = w + 20; this.y = Math.random() * h; } // Right
+        else if (side === 2) { this.x = Math.random() * w; this.y = h + 20; } // Bottom
+        else { this.x = -20; this.y = Math.random() * h; } // Left
+
+        this.size = Math.random() * 4 + 2;
+        this.speed = Math.random() * 0.05 + 0.02; // Lerp factor
+        this.life = 1.0;
+    }
+
+    update(targetX, targetY, w, h, intensity) {
+        // Lerp towards face center
+        this.x += (targetX - this.x) * (this.speed * intensity);
+        this.y += (targetY - this.y) * (this.speed * intensity);
+        
+        // Shrink slightly as they approach
+        const dist = Math.hypot(targetX - this.x, targetY - this.y);
+        if (dist < 20) this.reset(w, h); // Respawn if absorbed
+    }
+
+    draw(ctx) {
+        ctx.fillStyle = COLOR_PARTICLE;
+        ctx.globalAlpha = Math.random() * 0.8 + 0.2;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+    }
+}
+
+/**
+ * ------------------------------------------------------------------
+ * MAIN APPLICATION LOGIC
+ * ------------------------------------------------------------------
+ */
+class SageModeApp {
+    constructor() {
+        this.video = document.getElementsByClassName('input_video')[0];
+        this.canvas = document.getElementsByClassName('output_canvas')[0];
+        this.ctx = this.canvas.getContext('2d');
+        
+        this.particles = [];
+        this.maxParticles = 50;
+        
+        // Gameplay State
+        this.isMeditating = false;
+        this.energyLevel = 0; // 0 to 100
+        this.stage = 0; // 0: None, 1: Outline, 2: Solid, 3: Full Sage
+        this.prevNosePos = null;
+        this.stillnessThreshold = 0.008; // Sensitivity for movement
+        
+        this.init();
+    }
+
+    async init() {
+        // Initialize Particles
+        this.resize();
+        for(let i=0; i<this.maxParticles; i++) {
+            this.particles.push(new Particle(this.canvas.width, this.canvas.height));
+        }
+
+        // Initialize Face Mesh
+        const faceMesh = new FaceMesh({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+        }});
+        
+        faceMesh.setOptions(FACEMESH_OPTIONS);
+        faceMesh.onResults(this.onResults.bind(this));
+
+        // Initialize Camera
+        const camera = new Camera(this.video, {
+            onFrame: async () => {
+                await faceMesh.send({image: this.video});
+            },
+            width: 1280,
+            height: 720
+        });
+        camera.start();
+
+        window.addEventListener('resize', this.resize.bind(this));
+    }
+
+    resize() {
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+    }
+
+    startMeditation() {
+        this.isMeditating = true;
+        this.energyLevel = 0;
+        this.stage = 0;
+        document.getElementById('start-btn').disabled = true;
+        document.getElementById('status-text').innerText = "Status: STAY STILL...";
+    }
+
+    updateMeditationLogic(noseLandmark) {
+        if (!this.isMeditating) return;
+
+        // Stillness Check
+        if (this.prevNosePos) {
+            const dx = noseLandmark.x - this.prevNosePos.x;
+            const dy = noseLandmark.y - this.prevNosePos.y;
+            const movement = Math.sqrt(dx*dx + dy*dy);
+
+            if (movement < this.stillnessThreshold) {
+                this.energyLevel += 0.5; // Fill rate
+            } else {
+                // Punishment for moving: decay energy slightly
+                this.energyLevel = Math.max(0, this.energyLevel - 1); 
+            }
+        }
+        this.prevNosePos = noseLandmark;
+
+        // Update UI
+        const bar = document.getElementById('energy-bar');
+        bar.style.width = `${this.energyLevel}%`;
+
+        // Handle Stages
+        if (this.energyLevel > 30 && this.stage < 1) this.stage = 1;
+        if (this.energyLevel > 70 && this.stage < 2) this.stage = 2;
+        if (this.energyLevel >= 100 && this.stage < 3) {
+            this.stage = 3;
+            this.isMeditating = false; // Transformation complete
+            this.triggerShockwave();
+            document.getElementById('status-text').innerText = "Status: SAGE MODE ACTIVE";
+            document.getElementById('start-btn').innerText = "Meditation Complete";
+        }
+    }
+
+    triggerShockwave() {
+        const ui = document.getElementById('ui-layer');
+        ui.classList.add('shockwave-active');
+        setTimeout(() => ui.classList.remove('shockwave-active'), 500);
+    }
+
+    drawSageMask(landmarks, w, h) {
+        if (this.stage === 0) return;
+
+        this.ctx.save();
+        
+        // Opacity and Style based on stage
+        if (this.stage === 1) {
+            this.ctx.globalAlpha = 0.4;
+            this.ctx.fillStyle = 'rgba(255, 140, 0, 0.3)';
+        } else {
+            this.ctx.globalAlpha = 0.85; // Allow skin to show slightly
+            this.ctx.fillStyle = COLOR_ORANGE;
+        }
+
+        // Helper to draw shape from indices
+        const drawShape = (indices) => {
+            this.ctx.beginPath();
+            const start = landmarks[indices[0]];
+            this.ctx.moveTo(start.x * w, start.y * h);
+            for (let i = 1; i < indices.length; i++) {
+                const pt = landmarks[indices[i]];
+                this.ctx.lineTo(pt.x * w, pt.y * h);
+            }
+            this.ctx.closePath();
+            this.ctx.fill();
+            
+            // Soft blur edge for blending
+            this.ctx.shadowBlur = 10;
+            this.ctx.shadowColor = '#ff4500';
+            this.ctx.stroke(); // Outline for definition
+        };
+
+        // Draw Right Eye Mask (User Right)
+        drawShape(RIGHT_MASK_INDICES);
+
+        // Draw Left Eye Mask (User Left)
+        drawShape(LEFT_MASK_INDICES);
+
+        this.ctx.restore();
+    }
+
+    drawToadEyes(landmarks, w, h) {
+        if (this.stage < 2) return;
+
+        // MediaPipe Iris Landmarks: 
+        // 468 = Left Iris Center, 473 = Right Iris Center
+        // 469-472 (Left Circle), 474-477 (Right Circle)
+
+        const drawPupil = (centerIdx, radiusIndices) => {
+            const center = landmarks[centerIdx];
+            const edge = landmarks[radiusIndices[0]]; // Approx radius
+            
+            const cx = center.x * w;
+            const cy = center.y * h;
+            
+            // Calculate iris radius
+            const rx = Math.abs((edge.x * w) - cx);
+            
+            this.ctx.save();
+            
+            // 1. Gold Iris
+            this.ctx.beginPath();
+            this.ctx.arc(cx, cy, rx * 1.2, 0, 2 * Math.PI);
+            this.ctx.fillStyle = COLOR_GOLD;
+            this.ctx.globalAlpha = 0.6;
+            this.ctx.fill();
+
+            // 2. Horizontal Toad Pupil
+            this.ctx.translate(cx, cy);
+            // Rotate based on head tilt (between eyes)
+            const leftEye = landmarks[33];
+            const rightEye = landmarks[263];
+            const angle = Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x);
+            this.ctx.rotate(angle);
+
+            this.ctx.fillStyle = COLOR_PUPIL;
+            this.ctx.globalAlpha = 0.9;
+            // Draw Rectangle Bar
+            this.ctx.fillRect(-(rx * 1.4), -(rx * 0.25), rx * 2.8, rx * 0.5);
+
+            this.ctx.restore();
+        };
+
+        // Left Eye (468 center, 469 edge)
+        drawPupil(468, [469]);
+        
+        // Right Eye (473 center, 474 edge)
+        drawPupil(473, [474]);
+    }
+
+    onResults(results) {
+        this.ctx.save();
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // Draw Video Feed
+        this.ctx.drawImage(results.image, 0, 0, this.canvas.width, this.canvas.height);
+
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+            const landmarks = results.multiFaceLandmarks[0];
+            const w = this.canvas.width;
+            const h = this.canvas.height;
+
+            // 1. Update Game Logic (Check Stillness)
+            // Landmark 1 is nose tip
+            this.updateMeditationLogic(landmarks[1]);
+
+            // 2. Draw Sage Markings
+            this.drawSageMask(landmarks, w, h);
+
+            // 3. Draw Toad Eyes
+            this.drawToadEyes(landmarks, w, h);
+
+            // 4. Draw Nature Energy Particles
+            // Target is nose tip (Landmark 1)
+            const nose = landmarks[1];
+            const intensity = this.isMeditating ? 2.5 : (this.stage === 3 ? 1.0 : 0);
+            
+            if (intensity > 0) {
+                this.particles.forEach(p => {
+                    p.update(nose.x * w, nose.y * h, w, h, intensity);
+                    p.draw(this.ctx);
+                });
+            }
+        } else {
+            // Reset particles if no face
+            this.particles.forEach(p => p.reset(this.canvas.width, this.canvas.height));
+        }
+
+        this.ctx.restore();
+    }
+}
+
+// Instantiate App
+const app = new SageModeApp();
+
+</script>
+</body>
+</html>

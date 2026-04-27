@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stark Nanotech: Body-Mapped AR</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+        #container { position: relative; width: 100vw; height: 100vh; }
+        video { transform: scaleX(-1); position: absolute; width: 100%; height: 100%; object-fit: cover; }
+        canvas { position: absolute; top: 0; left: 0; z-index: 10; pointer-events: none; }
+        
+        .hud {
+            position: absolute; top: 20px; left: 20px; z-index: 100;
+            color: #00d2ff; text-transform: uppercase; letter-spacing: 2px;
+        }
+        .bar-container { width: 200px; height: 6px; background: rgba(0, 40, 60, 0.5); border: 1px solid #00d2ff; margin-top: 5px; }
+        .fill { height: 100%; width: 0%; transition: width 0.1s; }
+        #up-bar { background: #ff3300; box-shadow: 0 0 10px #ff3300; }
+        #down-bar { background: #00d2ff; box-shadow: 0 0 10px #00d2ff; }
+        .target { 
+            position: absolute; width: 40px; height: 40px; border: 2px dashed white; 
+            border-radius: 50%; transform: translate(-50%, -50%); z-index: 50; 
+        }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <video id="input_video"></video>
+    <div id="chest-target" class="target" style="border-color: #ff3300;"></div>
+    <div id="ear-target" class="target" style="border-color: #00d2ff;"></div>
+    
+    <div class="hud">
+        <div id="status">Scanning Pilot...</div>
+        <div>Suit Up</div>
+        <div class="bar-container"><div id="up-bar" class="fill"></div></div>
+        <div style="margin-top:10px">Suit Down</div>
+        <div class="bar-container"><div id="down-bar" class="fill"></div></div>
+    </div>
+</div>
+
+<script>
+let scene, camera, renderer, armorParts = {};
+let poseResults = null;
+let suitProgress = 0; // 0 to 100
+let suitState = "IDLE"; // IDLE, DEPLOYING, ACTIVE, RETRACTING
+
+const IRON_RED = 0xaa0000;
+const STARK_BLUE = 0x00d2ff;
+
+function initThree() {
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.z = 5;
+
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.getElementById('container').appendChild(renderer.domElement);
+
+    const light = new THREE.DirectionalLight(0xffffff, 1.5);
+    light.position.set(0, 5, 5);
+    scene.add(light);
+    scene.add(new THREE.AmbientLight(0x404040, 1));
+
+    createArmor();
+    animate();
+}
+
+// Create segmented armor pieces for body parts
+function createArmor() {
+    const mat = new THREE.MeshPhongMaterial({ 
+        color: STARK_BLUE, transparent: true, opacity: 0.3, wireframe: true 
+    });
+
+    // Parts: Chest, L-Bicep, R-Bicep, L-Forearm, R-Forearm
+    armorParts.chest = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 0.4), mat.clone());
+    armorParts.lArmUpper = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.12, 1), mat.clone());
+    armorParts.rArmUpper = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.12, 1), mat.clone());
+    armorParts.lArmLower = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.08, 1), mat.clone());
+    armorParts.rArmLower = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.08, 1), mat.clone());
+
+    Object.values(armorParts).forEach(part => scene.add(part));
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    if (poseResults && poseResults.poseLandmarks) {
+        updateMapping(poseResults.poseLandmarks);
+    }
+    renderer.render(scene, camera);
+}
+
+function updateMapping(lm) {
+    const v = (id) => lm[id].visibility > 0.6;
+    const toWorld = (p) => ({ x: (0.5 - p.x) * 6, y: (0.5 - p.y) * 6, z: -p.z * 2 });
+
+    // 1. TORSO / CHEST
+    if (v(11) && v(12)) {
+        const p1 = toWorld(lm[11]), p2 = toWorld(lm[12]);
+        const mid = { x: (p1.x + p2.x)/2, y: (p1.y + p2.y)/2, z: (p1.z + p2.z)/2 };
+        armorParts.chest.position.set(mid.x, mid.y - 0.5, mid.z);
+        armorParts.chest.scale.x = Math.abs(p1.x - p2.x) * 1.5;
+        armorParts.chest.visible = true;
+    }
+
+    // 2. ARMS (Segmented Tracking)
+    mapLimb(armorParts.rArmUpper, lm[12], lm[14], v(12) && v(14)); // Right Bicep
+    mapLimb(armorParts.rArmLower, lm[14], lm[16], v(14) && v(16)); // Right Forearm
+    mapLimb(armorParts.lArmUpper, lm[11], lm[13], v(11) && v(13)); // Left Bicep
+    mapLimb(armorParts.lArmLower, lm[13], lm[15], v(13) && v(15)); // Left Forearm
+
+    // GESTURES
+    const wristR = lm[16];
+    const chestMid = { x: (lm[11].x + lm[12].x)/2, y: (lm[11].y + lm[12].y)/2 };
+    const earR = lm[8];
+
+    const distUp = Math.hypot(wristR.x - chestMid.x, wristR.y - chestMid.y);
+    const distDown = Math.hypot(wristR.x - earR.x, wristR.y - earR.y);
+
+    // Update Targets for User
+    document.getElementById('chest-target').style.left = `${(1-chestMid.x)*100}%`;
+    document.getElementById('chest-target').style.top = `${chestMid.y*100}%`;
+    document.getElementById('ear-target').style.left = `${(1-earR.x)*100}%`;
+    document.getElementById('ear-target').style.top = `${earR.y*100}%`;
+
+    if (distUp < 0.12 && suitState !== "ACTIVE") suitState = "DEPLOYING";
+    if (distDown < 0.1 && suitState === "ACTIVE") suitState = "RETRACTING";
+
+    updateSuitAnimation();
+}
+
+function mapLimb(mesh, startLM, endLM, visible) {
+    if (!visible) { mesh.visible = false; return; }
+    mesh.visible = true;
+    
+    const pStart = new THREE.Vector3((0.5 - startLM.x)*6, (0.5 - startLM.y)*6, -startLM.z*2);
+    const pEnd = new THREE.Vector3((0.5 - endLM.x)*6, (0.5 - endLM.y)*6, -endLM.z*2);
+    
+    const direction = new THREE.Vector3().subVectors(pEnd, pStart);
+    const length = direction.length();
+    
+    mesh.scale.y = length;
+    mesh.position.copy(pStart).add(direction.multiplyScalar(0.5));
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.clone().normalize());
+}
+
+function updateSuitAnimation() {
+    const status = document.getElementById('status');
+    if (suitState === "DEPLOYING") {
+        suitProgress += 0.8;
+        status.innerText = "Deploying Armor Segments...";
+        if (suitProgress >= 100) { suitProgress = 100; suitState = "ACTIVE"; status.innerText = "Mark 85 Online"; }
+    } else if (suitState === "RETRACTING") {
+        suitProgress -= 1.5;
+        status.innerText = "Retracting Nanotech...";
+        if (suitProgress <= 0) { suitProgress = 0; suitState = "IDLE"; status.innerText = "Standby Mode"; }
+    }
+
+    document.getElementById('up-bar').style.width = suitProgress + "%";
+    document.getElementById('down-bar').style.width = (suitState === "RETRACTING" ? (100 - suitProgress) : 0) + "%";
+
+    // Visual Transition
+    Object.values(armorParts).forEach(part => {
+        const p = suitProgress / 100;
+        part.material.opacity = 0.3 + (p * 0.7);
+        part.material.wireframe = p < 0.95;
+        part.material.color.setHex(p > 0.8 ? IRON_RED : STARK_BLUE);
+    });
+}
+
+// MediaPipe Setup
+const pose = new Pose({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.5 });
+pose.onResults(res => { poseResults = res; });
+
+new Camera(document.getElementById('input_video'), {
+    onFrame: async () => { await pose.send({image: document.getElementById('input_video')}); },
+    width: 1280, height: 720
+}).start();
+
+initThree();
+window.addEventListener('resize', () => {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stark Industries: Nanotech AR</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Orbitron', sans-serif; }
+        #container { position: relative; width: 100vw; height: 100vh; }
+        video { transform: scaleX(-1); position: absolute; width: 100%; height: 100%; object-fit: cover; }
+        canvas { position: absolute; top: 0; left: 0; z-index: 10; pointer-events: none; }
+        
+        /* Stark HUD UI */
+        .hud-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 20; pointer-events: none;
+            display: flex; flex-direction: column; justify-content: space-between;
+            padding: 40px; box-sizing: border-box;
+            background: radial-gradient(circle, transparent 60%, rgba(0, 40, 80, 0.3) 100%);
+            border: 2px solid rgba(0, 210, 255, 0.1);
+        }
+        .status-panel { width: 300px; color: #00d2ff; text-shadow: 0 0 10px #00d2ff; }
+        .bar-container { width: 100%; height: 4px; background: rgba(0, 50, 100, 0.3); border: 1px solid #00d2ff; margin: 10px 0; overflow: hidden; }
+        .bar-fill { height: 100%; width: 0%; background: #00d2ff; box-shadow: 0 0 15px #00d2ff; transition: width 0.1s; }
+        #integrity-bar { background: #ff3300; box-shadow: 0 0 15px #ff3300; }
+        .label { font-size: 12px; letter-spacing: 2px; }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<div id="container">
+    <video id="input_video"></video>
+    <div class="hud-overlay">
+        <div class="status-panel">
+            <div class="label">BIOMETRIC SCAN</div>
+            <div class="bar-container"><div id="scan-bar" class="bar-fill"></div></div>
+            <div id="status-text" class="label">WAITING FOR PILOT...</div>
+        </div>
+        <div class="status-panel" style="align-self: flex-end; text-align: right;">
+            <div class="label">NANOTECH INTEGRITY</div>
+            <div class="bar-container"><div id="integrity-bar" class="bar-fill"></div></div>
+            <div id="integrity-text" class="label">OFFLINE</div>
+        </div>
+    </div>
+</div>
+
+<script>
+/**
+ * PARTICLE SHADER 
+ * Custom GLSL for Rasengan-style energy to solid transition
+ **/
+const vertexShader = `
+    varying vec3 vColor;
+    attribute vec3 targetPos;
+    uniform float uProgress;
+    uniform float uTime;
+    
+    void main() {
+        // Spiral Vortex logic for "Idle" particles
+        float angle = uTime * 5.0 + position.y * 10.0;
+        float radius = 0.2 + sin(uTime) * 0.1;
+        vec3 idlePos = vec3(cos(angle)*radius, position.y * 0.5, sin(angle)*radius);
+        
+        // Lerp from Idle (Chest Vortex) to Target (Suit Geometry)
+        vec3 transitionPos = mix(idlePos, targetPos, uProgress);
+        
+        // Apply jitter for nanotech "vibration"
+        transitionPos += sin(uTime * 20.0 + position.x) * 0.005;
+        
+        vColor = mix(vec3(0.0, 0.8, 1.0), vec3(0.7, 0.0, 0.0), uProgress);
+        
+        vec4 mvPosition = modelViewMatrix * vec4(transitionPos, 1.0);
+        gl_PointSize = (10.0 / -mvPosition.z) * (1.0 + uProgress);
+        gl_Position = projectionMatrix * mvPosition;
+    }
+`;
+
+const fragmentShader = `
+    varying vec3 vColor;
+    void main() {
+        float d = distance(gl_PointCoord, vec2(0.5));
+        if (d > 0.5) discard;
+        gl_FragColor = vec4(vColor, 1.0 - (d * 2.0));
+    }
+`;
+
+// --- THREE.JS SETUP ---
+let scene, camera, renderer, particles, particleMaterial;
+let suitState = "IDLE"; // IDLE, DEPLOYING, ACTIVE, RETRACTING
+let suitProgress = 0;
+let lastPose = null;
+let smoothedChest = new THREE.Vector3();
+
+function initThree() {
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.z = 5;
+
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.getElementById('container').appendChild(renderer.domElement);
+
+    createParticleSystem();
+    animate();
+}
+
+function createParticleSystem() {
+    const count = 5000;
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(count * 3);
+    const targets = new Float32Array(count * 3);
+
+    for (let i = 0; i < count; i++) {
+        // Initial random positions near chest
+        positions[i*3] = (Math.random() - 0.5) * 0.1;
+        positions[i*3+1] = (Math.random() - 0.5) * 0.1;
+        positions[i*3+2] = (Math.random() - 0.5) * 0.1;
+        
+        // Placeholder targets
+        targets[i*3] = 0; targets[i*3+1] = 0; targets[i*3+2] = 0;
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('targetPos', new THREE.BufferAttribute(targets, 3));
+
+    particleMaterial = new THREE.ShaderMaterial({
+        vertexShader, fragmentShader,
+        uniforms: { uProgress: { value: 0 }, uTime: { value: 0 } },
+        transparent: true, blending: THREE.AdditiveBlending
+    });
+
+    particles = new THREE.Points(geometry, particleMaterial);
+    scene.add(particles);
+}
+
+// --- MEDIAPIPE & GESTURE LOGIC ---
+function onResults(results) {
+    if (!results.poseLandmarks) return;
+    lastPose = results.poseLandmarks;
+
+    const lm = lastPose;
+    const v = (id) => lm[id].visibility > 0.7;
+
+    // 1. Calibration & Scaling
+    const shoulderDist = Math.hypot(lm[11].x - lm[12].x, lm[11].y - lm[12].y);
+    const referenceScale = shoulderDist * 10;
+
+    // 2. Chest Positioning (Mirrored Math)
+    const chestX = (0.5 - (lm[11].x + lm[12].x) / 2) * 6;
+    const chestY = (0.5 - (lm[11].y + lm[12].y) / 2) * 6;
+    
+    // Exponential Smoothing for Jitter
+    smoothedChest.x += (chestX - smoothedChest.x) * 0.2;
+    smoothedChest.y += (chestY - smoothedChest.y) * 0.2;
+    particles.position.set(smoothedChest.x, smoothedChest.y, 0);
+    particles.scale.set(referenceScale, referenceScale, referenceScale);
+
+    // 3. Gesture Detection
+    const wristR = lm[16];
+    const earR = lm[8];
+    const chestMid = { x: (lm[11].x + lm[12].x)/2, y: (lm[11].y + lm[12].y)/2 };
+
+    const distToChest = Math.hypot(wristR.x - chestMid.x, wristR.y - chestMid.y);
+    const distToEar = Math.hypot(wristR.x - earR.x, wristR.y - earR.y);
+
+    if (distToChest < 0.1 && suitState === "IDLE") {
+        suitState = "DEPLOYING";
+    }
+    if (distToEar < 0.08 && suitState === "ACTIVE") {
+        suitState = "RETRACTING";
+    }
+
+    // 4. Update Particle Targets based on skeleton
+    updateParticleTargets(lm);
+}
+
+function updateParticleTargets(lm) {
+    const targets = particles.geometry.attributes.targetPos.array;
+    const count = targets.length / 3;
+
+    // Simple procedural body mapping for the "Suit"
+    // In a full version, you would iterate over vertices of a loaded GLB
+    for (let i = 0; i < count; i++) {
+        let part = i % 4; // Distribute particles to Head, Chest, L-Arm, R-Arm
+        let target;
+        if (part === 0) target = lm[0]; // Head
+        else if (part === 1) target = {x: (lm[11].x+lm[12].x)/2, y: (lm[11].y+lm[23].y)/2, z: 0}; // Torso
+        else if (part === 2) target = lm[15]; // Left Arm
+        else target = lm[16]; // Right Arm
+
+        // Convert MediaPipe 0-1 to Three.js space relative to smoothed chest
+        targets[i*3] = (0.5 - target.x) * 6 - smoothedChest.x;
+        targets[i*3+1] = (0.5 - target.y) * 6 - smoothedChest.y;
+        targets[i*3+2] = -target.z * 2;
+    }
+    particles.geometry.attributes.targetPos.needsUpdate = true;
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    const time = performance.now() * 0.001;
+    particleMaterial.uniforms.uTime.value = time;
+
+    // Handle Nanotech Progress
+    if (suitState === "DEPLOYING") {
+        suitProgress += (1 / (15 * 60)); // 15s at 60fps
+        if (suitProgress >= 1) { suitProgress = 1; suitState = "ACTIVE"; }
+    } else if (suitState === "RETRACTING") {
+        suitProgress -= (1 / (8 * 60)); // 8s
+        if (suitProgress <= 0) { suitProgress = 0; suitState = "IDLE"; }
+    }
+
+    particleMaterial.uniforms.uProgress.value = suitProgress;
+    
+    // Update HUD
+    document.getElementById('integrity-bar').style.width = (suitProgress * 100) + "%";
+    document.getElementById('integrity-text').innerText = suitState;
+    
+    renderer.render(scene, camera);
+}
+
+// --- INITIALIZATION ---
+const pose = new Pose({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.6 });
+pose.onResults(onResults);
+
+const video = document.getElementById('input_video');
+new Camera(video, {
+    onFrame: async () => { await pose.send({image: video}); },
+    width: 1280, height: 720
+}).start();
+
+initThree();
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>

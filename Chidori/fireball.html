@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fire Style: Fireball Jutsu | AR Experience</title>
+    
+    <!-- MediaPipe Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        /* --- UI & LAYOUT --- */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050505;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        /* Container for AR Canvas */
+        #canvas-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            max-width: 1280px;
+            max-height: 720px;
+            box-shadow: 0 0 50px rgba(255, 69, 0, 0.2);
+            border: 1px solid #333;
+            background: #000;
+        }
+
+        /* The Output Canvas (Mirrored for UX) */
+        #output_canvas {
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1); /* Mirror effect */
+            display: block;
+        }
+
+        /* Raw Video (Hidden, used for processing) */
+        #input_video {
+            display: none;
+        }
+
+        /* --- HUD / UI LAYERS --- */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* Let clicks pass through to button */
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            font-size: 2rem;
+            text-transform: uppercase;
+            letter-spacing: 4px;
+            margin: 0;
+            text-shadow: 0 0 10px #ff4500, 2px 2px 0px #8b0000;
+            background: linear-gradient(to bottom, #ffeb3b, #ff4500);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: 900;
+            text-align: center;
+        }
+
+        .status-text {
+            text-align: center;
+            font-size: 1.2rem;
+            color: #ffccaa;
+            text-shadow: 0 0 5px #000;
+            margin-top: 10px;
+            opacity: 0.8;
+        }
+
+        /* Start Button */
+        #start-btn {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 15px 40px;
+            font-size: 1.5rem;
+            background: linear-gradient(45deg, #8b0000, #ff4500);
+            color: white;
+            border: 2px solid #ffeb3b;
+            cursor: pointer;
+            pointer-events: auto;
+            text-transform: uppercase;
+            font-weight: bold;
+            box-shadow: 0 0 20px #ff4500;
+            transition: all 0.3s ease;
+            z-index: 100;
+        }
+
+        #start-btn:hover {
+            box-shadow: 0 0 40px #ffeb3b;
+            transform: translate(-50%, -50%) scale(1.1);
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Loading Spinner */
+        #loader {
+            display: none;
+            position: absolute;
+            top: 60%;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #ff4500;
+            font-size: 1.2rem;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <video id="input_video"></video>
+        <canvas id="output_canvas"></canvas>
+        
+        <div id="ui-layer">
+            <div>
+                <h1>Fire Style: Fireball Jutsu</h1>
+                <div class="status-text" id="status-display">Form the Tiger Seal (Hold Hands Together)</div>
+            </div>
+        </div>
+
+        <button id="start-btn">Initialize Chakra</button>
+        <div id="loader">Gathering Nature Energy...</div>
+    </div>
+
+<script>
+/**
+ * SENIOR CREATIVE TECHNOLOGIST & VFX ARTIST
+ * Project: Fireball Jutsu AR
+ * 
+ * Logic Breakdown:
+ * 1. Setup MediaPipe Hands to detect landmark distance.
+ * 2. If hands < threshold, increase 'charge'.
+ * 3. Use 'charge' to drive a Particle System.
+ * 4. Render using Additive Blending (Composite 'lighter') for glow.
+ */
+
+// --- CONFIGURATION ---
+const CONFIG = {
+    particleCount: 350,          // Max particles (Mobile optimized)
+    activationDistance: 0.15,    // Normalized distance between hands to trigger
+    chargeSpeed: 0.05,           // How fast the fireball grows
+    decaySpeed: 0.02,            // How fast it fades when hands separate
+    colors: {
+        core: 'rgba(255, 255, 240, 1)',  // White hot
+        mid: 'rgba(255, 200, 0, 0.8)',   // Yellow
+        edge: 'rgba(255, 69, 0, 0.6)',   // Orange/Red
+        smoke: 'rgba(50, 10, 10, 0.3)'   // Dark smoke
+    }
+};
+
+// --- GLOBAL STATE ---
+let canvas, ctx, videoElement;
+let width, height;
+let handsResults = null;
+let fireState = {
+    active: false,
+    charge: 0,      // 0.0 to 1.0
+    centerX: 0.5,
+    centerY: 0.5,
+    pulse: 0        // For heat distortion/flicker
+};
+let particles = [];
+
+// --- PARTICLE ENGINE ---
+
+class Particle {
+    constructor() {
+        this.reset(true);
+    }
+
+    reset(initial = false) {
+        // Position: Start at the center of the fireball with slight random offset
+        const angle = Math.random() * Math.PI * 2;
+        // Spread depends on charge level (bigger fire = wider spawn area)
+        const spread = (fireState.charge * 80) * Math.random(); 
+        
+        this.x = (fireState.centerX * width) + Math.cos(angle) * spread;
+        this.y = (fireState.centerY * height) + Math.sin(angle) * spread;
+
+        // Velocity: Fire goes UP, but also outwards based on explosion force
+        const speed = 1 + Math.random() * 3 + (fireState.charge * 2);
+        this.vx = (Math.random() - 0.5) * speed; 
+        this.vy = -Math.random() * speed - 1; // Always trend upwards
+
+        // Physics
+        this.life = 1.0;
+        this.decay = 0.01 + Math.random() * 0.03;
+        
+        // Appearance
+        this.sizeBase = 10 + Math.random() * 20;
+        this.type = Math.random() > 0.9 ? 'ember' : 'flame';
+        
+        // Embers fly faster and live shorter
+        if (this.type === 'ember') {
+            this.vx *= 2;
+            this.vy *= 2;
+            this.decay = 0.05;
+            this.sizeBase = 2 + Math.random() * 3;
+        }
+
+        // Wobble for flame tongues
+        this.wobbleFreq = Math.random() * 0.2;
+        this.wobbleOffset = Math.random() * 100;
+    }
+
+    update() {
+        // Move
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // Physics: Fire rises faster as it ages (heat)
+        this.vy -= 0.05;
+
+        // Flame Wobble (Sine wave simulation)
+        if (this.type === 'flame') {
+            this.x += Math.sin(this.y * 0.05 + this.wobbleOffset) * 0.5;
+        }
+
+        // Age
+        this.life -= this.decay;
+
+        // Reset if dead and fire is active
+        if (this.life <= 0) {
+            if (fireState.charge > 0.05) {
+                this.reset();
+            } else {
+                // Move off screen to "sleep"
+                this.x = -1000;
+            }
+        }
+    }
+
+    draw(ctx) {
+        if (this.life <= 0) return;
+
+        const currentSize = this.sizeBase * this.life * (0.5 + fireState.charge);
+        
+        // Color Gradients based on life
+        let color;
+        if (this.type === 'ember') {
+            color = `rgba(255, 200, 150, ${this.life})`;
+        } else {
+            // Flame Gradient: White -> Yellow -> Orange -> Red -> Transparent
+            if (this.life > 0.8) {
+                color = CONFIG.colors.core;
+            } else if (this.life > 0.5) {
+                color = CONFIG.colors.mid;
+            } else if (this.life > 0.2) {
+                color = `rgba(255, 69, 0, ${this.life})`; // Red
+            } else {
+                color = `rgba(50, 50, 50, ${this.life * 0.5})`; // Smoke
+            }
+        }
+
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, currentSize, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+    }
+}
+
+// --- APP LIFECYCLE ---
+
+function init() {
+    videoElement = document.getElementById('input_video');
+    canvas = document.getElementById('output_canvas');
+    ctx = canvas.getContext('2d');
+
+    // Button Logic
+    document.getElementById('start-btn').addEventListener('click', startExperience);
+    
+    // Initialize Particles
+    for(let i=0; i<CONFIG.particleCount; i++) {
+        particles.push(new Particle());
+    }
+}
+
+async function startExperience() {
+    const btn = document.getElementById('start-btn');
+    const loader = document.getElementById('loader');
+    
+    btn.classList.add('hidden');
+    loader.style.display = 'block';
+
+    // Setup MediaPipe Hands
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+    });
+
+    hands.onResults(onResults);
+
+    // Setup Camera
+    const camera = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 1280,
+        height: 720
+    });
+
+    await camera.start();
+    
+    loader.style.display = 'none';
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+}
+
+function resizeCanvas() {
+    canvas.width = canvas.clientWidth;
+    canvas.height = canvas.clientHeight;
+    width = canvas.width;
+    height = canvas.height;
+}
+
+// --- CORE LOGIC LOOP ---
+
+function onResults(results) {
+    handsResults = results;
+    
+    // 1. Draw Video Feed
+    ctx.save();
+    ctx.clearRect(0, 0, width, height);
+    
+    // Draw video normally (Source-Over)
+    ctx.drawImage(results.image, 0, 0, width, height);
+    
+    // 2. Logic: Hand Detection & Distance
+    processHandLogic(results);
+
+    // 3. Environmental Lighting (The "Glow")
+    if (fireState.charge > 0.1) {
+        renderEnvironmentalLight();
+    }
+
+    // 4. Render Particles (Additive Blending)
+    renderParticles();
+    
+    // 5. UI Updates
+    updateUI();
+
+    ctx.restore();
+}
+
+function processHandLogic(results) {
+    let handsDetected = false;
+
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length === 2) {
+        // We have two hands
+        const hand1 = results.multiHandLandmarks[0];
+        const hand2 = results.multiHandLandmarks[1];
+
+        // Get coordinates of Index Finger Base (Landmark 5) or Wrist (0)
+        // Using Index MCP (5) for "Cup" shape approximation
+        const h1 = { x: hand1[9].x, y: hand1[9].y };
+        const h2 = { x: hand2[9].x, y: hand2[9].y };
+
+        // Calculate Distance
+        const dist = Math.sqrt(Math.pow(h1.x - h2.x, 2) + Math.pow(h1.y - h2.y, 2));
+        
+        // Calculate Center point between hands
+        fireState.centerX = (h1.x + h2.x) / 2;
+        fireState.centerY = (h1.y + h2.y) / 2;
+
+        if (dist < CONFIG.activationDistance) {
+            // TIGER SEAL ACTIVATED: Charging up
+            fireState.charge = Math.min(fireState.charge + CONFIG.chargeSpeed, 1.0);
+            handsDetected = true;
+        } 
+    }
+
+    if (!handsDetected) {
+        // Cool down if hands separate or lost
+        fireState.charge = Math.max(fireState.charge - CONFIG.decaySpeed, 0);
+    }
+
+    // Pulse Logic for Shimmer
+    fireState.pulse += 0.1;
+}
+
+function renderEnvironmentalLight() {
+    // This creates the effect that the fire is lighting up the room/face
+    // We draw a large, low-opacity gradient over the video *before* the fire
+    
+    const x = fireState.centerX * width;
+    const y = fireState.centerY * height;
+    const radius = 100 + (fireState.charge * 600); // Expands with fire
+
+    const gradient = ctx.createRadialGradient(x, y, 50, x, y, radius);
+    
+    // Color: Orange-Red glow
+    gradient.addColorStop(0, `rgba(255, 100, 0, ${0.4 * fireState.charge})`);
+    gradient.addColorStop(0.5, `rgba(100, 20, 0, ${0.2 * fireState.charge})`);
+    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+    ctx.fillStyle = gradient;
+    ctx.globalCompositeOperation = 'screen'; // Screen blends nicely for lighting
+    ctx.fillRect(0, 0, width, height);
+}
+
+function renderParticles() {
+    // Switch to Additive Blending - This is key for "Fire" look
+    ctx.globalCompositeOperation = 'lighter';
+
+    // Optional: Draw a "Heat Distortion" blur behind the core
+    // (Simulated by a large, faint circle)
+    if (fireState.charge > 0.3) {
+        const x = fireState.centerX * width;
+        const y = fireState.centerY * height;
+        const pulseSize = Math.sin(fireState.pulse) * 10;
+        
+        ctx.beginPath();
+        ctx.arc(x, y, (100 * fireState.charge) + pulseSize, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(50, 10, 0, 0.3)';
+        ctx.fill();
+    }
+
+    // Update and Draw all particles
+    particles.forEach(p => {
+        p.update();
+        p.draw(ctx);
+    });
+
+    // Return to normal blending for UI or subsequent draws
+    ctx.globalCompositeOperation = 'source-over';
+}
+
+function updateUI() {
+    const statusText = document.getElementById('status-display');
+    if (fireState.charge > 0.8) {
+        statusText.innerText = "JUTSU ACTIVE: MAX POWER";
+        statusText.style.color = "#fff";
+        statusText.style.textShadow = "0 0 10px #ff0000";
+    } else if (fireState.charge > 0.2) {
+        statusText.innerText = "CHARGING CHAKRA...";
+        statusText.style.color = "#ffaa00";
+    } else {
+        statusText.innerText = "Form the Tiger Seal (Hands Together)";
+        statusText.style.color = "#ffccaa";
+    }
+}
+
+// Run Initialization
+window.onload = init;
+
+</script>
+</body>
+</html>

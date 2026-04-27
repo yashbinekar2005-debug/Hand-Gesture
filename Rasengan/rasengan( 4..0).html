@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shinobi AR: Ultimate Rasengan</title>
+    <style>
+        :root {
+            --cyan: #00f2ff;
+            --deep-blue: #0066ff;
+            --white: #ffffff;
+            --dark: #020508;
+        }
+
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: var(--dark);
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            color: white; overflow: hidden;
+        }
+
+        #app-container {
+            position: relative; width: 100vw; height: 100vh;
+            display: flex; justify-content: center; align-items: center;
+        }
+
+        #webcam, #output_canvas {
+            position: absolute;
+            width: 100%; height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror Mode */
+        }
+
+        /* UI Overlays */
+        #ui-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 10;
+            border: 20px solid rgba(0, 242, 255, 0.05);
+            box-sizing: border-box;
+        }
+
+        .hud-container {
+            padding: 40px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .chakra-card {
+            background: rgba(0, 10, 20, 0.8);
+            border: 1px solid var(--cyan);
+            padding: 15px; width: 280px;
+            backdrop-filter: blur(8px);
+            opacity: 0; transform: translateY(-20px);
+            transition: 0.4s all ease;
+        }
+
+        .chakra-card.active { opacity: 1; transform: translateY(0); }
+
+        .bar-bg { width: 100%; height: 12px; background: rgba(255,255,255,0.1); margin-top: 10px; overflow: hidden; }
+        .bar-fill { height: 100%; width: 0%; background: var(--cyan); box-shadow: 0 0 15px var(--cyan); }
+
+        #start-screen {
+            position: absolute; z-index: 100;
+            width: 100%; height: 100%;
+            background: radial-gradient(circle, #0a1a2f 0%, #020508 100%);
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+        }
+
+        .btn-start {
+            background: transparent; color: var(--cyan);
+            border: 2px solid var(--cyan);
+            padding: 20px 50px; font-size: 1.5rem;
+            text-transform: uppercase; cursor: pointer;
+            letter-spacing: 5px; transition: 0.3s;
+            font-weight: bold;
+        }
+
+        .btn-start:hover {
+            background: var(--cyan); color: black;
+            box-shadow: 0 0 50px var(--cyan);
+        }
+
+        .system-status { position: absolute; bottom: 20px; left: 20px; font-size: 0.8rem; color: var(--cyan); opacity: 0.6; }
+    </style>
+</head>
+<body>
+
+    <div id="start-screen">
+        <h1 style="letter-spacing: 15px; margin-bottom: 30px;">RASENGAN ENGINE</h1>
+        <button class="btn-start" id="initBtn">Begin Channeling</button>
+        <p style="margin-top: 20px; color: #555;">Hold palm toward camera to manifest chakra.</p>
+    </div>
+
+    <div id="app-container">
+        <video id="webcam" autoplay playsinline></video>
+        <canvas id="output_canvas"></canvas>
+
+        <div id="ui-overlay">
+            <div class="hud-container">
+                <div id="hud-0" class="chakra-card">
+                    <div style="font-size: 0.7rem; letter-spacing: 2px;">LEFT CHANNEL</div>
+                    <div class="bar-bg"><div id="fill-0" class="bar-fill"></div></div>
+                </div>
+                <div id="hud-1" class="chakra-card">
+                    <div style="font-size: 0.7rem; letter-spacing: 2px;">RIGHT CHANNEL</div>
+                    <div class="bar-bg"><div id="fill-1" class="bar-fill"></div></div>
+                </div>
+            </div>
+            <div class="system-status">NEURAL_LINK_ACTIVE // 60FPS // CHAKRA_MODE</div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
+        const video = document.getElementById("webcam");
+        const canvas = document.getElementById("output_canvas");
+        const ctx = canvas.getContext("2d");
+        const initBtn = document.getElementById("initBtn");
+        const startScreen = document.getElementById("start-screen");
+
+        let handLandmarker;
+        let lastVideoTime = -1;
+        const handStates = new Map();
+        let particles = [];
+
+        // Initialize MediaPipe
+        async function loadModel() {
+            const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                numHands: 2
+            });
+        }
+
+        async function startApp() {
+            await loadModel();
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+            video.srcObject = stream;
+            video.onloadeddata = () => {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                startScreen.style.display = "none";
+                requestAnimationFrame(renderFrame);
+            };
+        }
+
+        function drawRasengan(x, y, baseRadius, elapsed, id) {
+            let growth = 1.0;
+            const chargeLimit = 3000;
+            if (elapsed > chargeLimit) {
+                // Accelerates growth after 3 seconds up to 3.0x
+                growth = Math.min(3.0, 1.0 + (elapsed - chargeLimit) / 2000);
+            }
+
+            const radius = baseRadius * growth;
+            const rotation = performance.now() * 0.008;
+
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.globalCompositeOperation = 'lighter';
+
+            // 1. OUTER CHAKRA DISTORTION (The pulse)
+            const pulse = Math.sin(performance.now() * 0.01) * 10;
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(0, 242, 255, 0.2)';
+            ctx.lineWidth = 5;
+            ctx.arc(0, 0, radius + pulse, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // 2. MAIN SWIRLING SHELL
+            ctx.shadowBlur = 40;
+            ctx.shadowColor = '#00f2ff';
+            
+            for (let i = 0; i < 5; i++) {
+                ctx.beginPath();
+                ctx.rotate(rotation * (i * 0.2 + 1));
+                ctx.lineWidth = 3 * growth;
+                ctx.strokeStyle = `rgba(0, 242, 255, ${0.3 + (i * 0.15)})`;
+                // Create spiraling oval paths
+                ctx.ellipse(0, 0, radius * 0.9, radius * (0.2 + i * 0.15), 0, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            // 3. INTERNAL HIGH-DENSITY CORE (Maximum Visibility)
+            const coreGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, radius * 0.7);
+            coreGrad.addColorStop(0, '#ffffff'); // Pure white center
+            coreGrad.addColorStop(0.2, '#ffffff');
+            coreGrad.addColorStop(0.5, 'rgba(0, 242, 255, 0.9)');
+            coreGrad.addColorStop(1, 'transparent');
+            
+            ctx.fillStyle = coreGrad;
+            ctx.beginPath();
+            ctx.arc(0, 0, radius * 0.75, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
+
+            // Update UI
+            const bar = document.getElementById(`fill-${id}`);
+            const card = document.getElementById(`hud-${id}`);
+            card.classList.add('active');
+            const progress = Math.min(100, (elapsed / chargeLimit) * 100);
+            bar.style.width = `${progress}%`;
+
+            // Particle Suction Logic
+            spawnParticles(x, y, radius, id);
+        }
+
+        function spawnParticles(x, y, radius, handId) {
+            for (let i = 0; i < 4; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const distance = radius * (1.5 + Math.random());
+                particles.push({
+                    x, y, angle, distance,
+                    speed: 4 + Math.random() * 5,
+                    size: Math.random() * 3,
+                    handId
+                });
+            }
+        }
+
+        function updateParticles() {
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.distance -= p.speed; // Moves toward center
+                p.angle += 0.2; // Spirals
+                
+                const px = p.x + Math.cos(p.angle) * p.distance;
+                const py = p.y + Math.sin(p.angle) * p.distance;
+
+                ctx.fillStyle = 'white';
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = '#00f2ff';
+                ctx.beginPath();
+                ctx.arc(px, py, p.size, 0, Math.PI * 2);
+                ctx.fill();
+
+                if (p.distance < 10) particles.splice(i, 1);
+            }
+            ctx.restore();
+        }
+
+        function renderFrame() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if (video.currentTime !== lastVideoTime) {
+                lastVideoTime = video.currentTime;
+                const results = handLandmarker.detectForVideo(video, performance.now());
+                
+                const activeHands = new Set();
+
+                if (results.landmarks) {
+                    results.landmarks.forEach((landmarks, index) => {
+                        activeHands.add(index);
+                        
+                        if (!handStates.has(index)) {
+                            handStates.set(index, { startTime: Date.now() });
+                        }
+
+                        const state = handStates.get(index);
+                        const elapsed = Date.now() - state.startTime;
+
+                        // PALM CENTROID CALCULATION
+                        // Average: Wrist(0), Index_MCP(5), Middle_MCP(9), Ring_MCP(13), Pinky_MCP(17)
+                        const palmX = (landmarks[0].x + landmarks[5].x + landmarks[9].x + landmarks[13].x + landmarks[17].x) / 5 * canvas.width;
+                        const palmY = (landmarks[0].y + landmarks[5].y + landmarks[9].y + landmarks[13].y + landmarks[17].y) / 5 * canvas.height;
+
+                        // Scaling based on distance from Wrist to Middle Finger MCP
+                        const baseSize = Math.hypot(
+                            (landmarks[0].x - landmarks[9].x) * canvas.width,
+                            (landmarks[0].y - landmarks[9].y) * canvas.height
+                        );
+
+                        drawRasengan(palmX, palmY, baseSize * 0.85, elapsed, index);
+                    });
+                }
+
+                // Cleanup inactive hands
+                [0, 1].forEach(i => {
+                    if (!activeHands.has(i)) {
+                        handStates.delete(i);
+                        document.getElementById(`hud-${i}`).classList.remove('active');
+                        document.getElementById(`fill-${i}`).style.width = "0%";
+                    }
+                });
+            }
+
+            updateParticles();
+            requestAnimationFrame(renderFrame);
+        }
+
+        initBtn.addEventListener("click", startApp);
+    </script>
+</body>
+</html>

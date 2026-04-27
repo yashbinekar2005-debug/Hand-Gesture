@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sudarshan AR - Real Divine Weapon & Visphot</title>
+    
+    <!-- MediaPipe Hands CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #050510; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .input_video { display: none; }
+        .output_canvas {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+            transform: scaleX(-1); /* Mirror effect */
+        }
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #FFD700;
+            text-shadow: 0 0 15px #8A2BE2;
+            z-index: 10;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 1.5rem;
+            text-shadow: 0 0 20px #FFD700;
+            z-index: 20;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <h2>Divine Sudarshan AR</h2>
+        <p>Raise your index finger to summon. <b>Make a FIST to throw it!</b></p>
+    </div>
+    <div id="loading">Initializing Divine Engine...</div>
+
+    <video class="input_video"></video>
+    <canvas class="output_canvas"></canvas>
+
+<script>
+    const videoElement = document.querySelector('.input_video');
+    const canvasElement = document.querySelector('.output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+
+    // =========================================================
+    // --- AUDIO / MUSIC PLACEHOLDERS ---
+    // =========================================================
+    const throwMusic = new Audio(''); // Example: 'sounds/epic_throw.mp3'
+    const strikeMusic = new Audio(''); // Example: 'sounds/visphot_blast.mp3'
+    throwMusic.volume = 1.0;
+    strikeMusic.volume = 1.0;
+
+    // --- State & Physics Variables ---
+    let chakraState = 'IDLE'; // States: IDLE, ATTACHED, THROWN, STUCK
+    let attachedFrames = 0;   
+    let stuckTimer = 0;       
+    let shakeFrames = 0;      
+    let throwTime = 0;        // Used for random motion math
+    
+    // Blast (Visphot) Variables
+    let blastRadius = 0;
+    let blastAlpha = 0;
+
+    // Positioning 
+    let currentTipX = 0, currentTipY = 0;
+    let targetTipX = 0, targetTipY = 0;
+    let currentMcpX = 0, currentMcpY = 0;
+    let targetMcpX = 0, targetMcpY = 0;
+    let frozenFingerAngle = 0;      
+    
+    // Scale & 3D Perspective Physics
+    let currentScale = 0;
+    let targetScale = 0;
+    let scaleVelocity = 0;
+    const tension = 0.12;
+    const friction = 0.8;
+    
+    let yCompression = 0.22;       
+    let targetYCompression = 0.22; 
+
+    let baseRadius = 160; 
+    let rotationAngle = 0;
+    let particles =[];
+    
+    let latestImage = null;
+    let latestLandmarks = null;
+
+    function resizeCanvas() {
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function getDistance(p1, p2) {
+        const dx = (p1.x - p2.x) * canvasElement.width;
+        const dy = (p1.y - p2.y) * canvasElement.height;
+        return Math.hypot(dx, dy);
+    }
+
+    // Gesture 1: Summon (Index up, others folded)
+    function checkSudarshanGesture(landmarks) {
+        const wrist = landmarks[0];
+        const indexDist = getDistance(landmarks[8], wrist);
+        const indexMCPDist = getDistance(landmarks[5], wrist);
+        const middleDist = getDistance(landmarks[12], wrist);
+        const middleMCPDist = getDistance(landmarks[9], wrist);
+        const ringDist = getDistance(landmarks[16], wrist);
+        const ringMCPDist = getDistance(landmarks[13], wrist);
+        const pinkyDist = getDistance(landmarks[20], wrist);
+        const pinkyMCPDist = getDistance(landmarks[17], wrist);
+
+        return (indexDist > indexMCPDist) && 
+               (middleDist < middleMCPDist) && 
+               (ringDist < ringMCPDist) && 
+               (pinkyDist < pinkyMCPDist);
+    }
+
+    // Gesture 2: Throw (Fist - All fingers folded)
+    function checkFistGesture(landmarks) {
+        const wrist = landmarks[0];
+        const indexDist = getDistance(landmarks[8], wrist);
+        const indexMCPDist = getDistance(landmarks[5], wrist);
+        const middleDist = getDistance(landmarks[12], wrist);
+        const middleMCPDist = getDistance(landmarks[9], wrist);
+        const ringDist = getDistance(landmarks[16], wrist);
+        const ringMCPDist = getDistance(landmarks[13], wrist);
+        const pinkyDist = getDistance(landmarks[20], wrist);
+        const pinkyMCPDist = getDistance(landmarks[17], wrist);
+
+        // If all finger tips are closer to wrist than their knuckles, it's a fist
+        return (indexDist < indexMCPDist) && 
+               (middleDist < middleMCPDist) && 
+               (ringDist < ringMCPDist) && 
+               (pinkyDist < pinkyMCPDist);
+    }
+
+    // --- Particle System ---
+    class Particle {
+        constructor(x, y, speedMult = 1) {
+            this.x = x;
+            this.y = y;
+            this.vx = (Math.random() - 0.5) * 15 * speedMult;
+            this.vy = (Math.random() - 0.5) * 15 * speedMult;
+            this.life = 1.0;
+            this.decay = Math.random() * 0.05 + 0.02;
+            const colors =['#FFFFFF', '#FFD700', '#FF4500', '#8A2BE2'];
+            this.color = colors[Math.floor(Math.random() * colors.length)];
+            this.size = Math.random() * 6 + 2;
+        }
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.life -= this.decay;
+        }
+        draw(ctx) {
+            if (this.life <= 0) return;
+            ctx.globalAlpha = this.life;
+            ctx.fillStyle = this.color;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    function explodeParticles(x, y, amount, speedMult = 1) {
+        for(let i=0; i<amount; i++) particles.push(new Particle(x, y, speedMult));
+    }
+
+    // --- Trigger Throw Function ---
+    function triggerThrow() {
+        chakraState = 'THROWN';
+        throwTime = 0;
+        
+        // Lock the initial release angle
+        const dx = currentTipX - currentMcpX;
+        const dy = currentTipY - currentMcpY;
+        frozenFingerAngle = Math.atan2(dy, dx) + Math.PI / 2;
+
+        if (throwMusic.src) {
+            throwMusic.currentTime = 0;
+            throwMusic.play().catch(e => console.log(e));
+        }
+
+        targetScale = 5.0;         // Get massively bigger approaching screen
+        targetYCompression = 1.0;  // Rotate to flat
+    }
+
+    // --- MediaPipe Callback ---
+    function onResults(results) {
+        document.getElementById('loading').style.display = 'none';
+        latestImage = results.image;
+        
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            latestLandmarks = results.multiHandLandmarks[0];
+            
+            const isSummonGesture = checkSudarshanGesture(latestLandmarks);
+            const isFistGesture = checkFistGesture(latestLandmarks);
+
+            const tipX = latestLandmarks[8].x * canvasElement.width;
+            const tipY = latestLandmarks[8].y * canvasElement.height;
+
+            if (chakraState === 'IDLE' && isSummonGesture) {
+                // Summon Chakra
+                chakraState = 'ATTACHED';
+                attachedFrames = 0;
+                targetScale = 1.0;
+                targetYCompression = 0.22; 
+                currentTipX = tipX; currentTipY = tipY;
+                currentMcpX = latestLandmarks[5].x * canvasElement.width;
+                currentMcpY = latestLandmarks[5].y * canvasElement.height;
+            } 
+            else if (chakraState === 'ATTACHED') {
+                attachedFrames++;
+                
+                // If user makes a fist while holding chakra, THROW IT!
+                if (isFistGesture && attachedFrames > 10) {
+                    triggerThrow();
+                } 
+                // If they drop the pose entirely (not a fist, not pointing)
+                else if (!isSummonGesture && !isFistGesture) {
+                    chakraState = 'IDLE';
+                    targetScale = 0;
+                    explodeParticles(currentTipX, currentTipY, 30);
+                } 
+                // Normal Tracking
+                else {
+                    targetTipX = tipX; targetTipY = tipY;
+                    targetMcpX = latestLandmarks[5].x * canvasElement.width;
+                    targetMcpY = latestLandmarks[5].y * canvasElement.height;
+
+                    const handSize = getDistance(latestLandmarks[0], latestLandmarks[9]);
+                    baseRadius = handSize * 1.4;
+                }
+            }
+        } else {
+            if (chakraState === 'ATTACHED') {
+                chakraState = 'IDLE';
+                targetScale = 0;
+            }
+        }
+    }
+
+    // --- Advanced Geometry Rendering (Unchanged) ---
+    function drawDetailedChakra(ctx, radius) {
+        ctx.beginPath();
+        const numTeeth = 108; 
+        for(let i=0; i<numTeeth; i++) {
+            const angle = (i * Math.PI * 2) / numTeeth;
+            const nextAngle = ((i+1) * Math.PI * 2) / numTeeth;
+            const midAngle = angle + (nextAngle - angle) * 0.7; 
+
+            const innerRoot = radius * 0.80; 
+            const outerTip = radius; 
+            
+            if (i === 0) ctx.moveTo(Math.cos(angle) * innerRoot, Math.sin(angle) * innerRoot);
+            ctx.lineTo(Math.cos(midAngle) * outerTip, Math.sin(midAngle) * outerTip);
+            ctx.lineTo(Math.cos(nextAngle) * innerRoot, Math.sin(nextAngle) * innerRoot);
+        }
+        const edgeGrad = ctx.createLinearGradient(-radius, -radius, radius, radius);
+        edgeGrad.addColorStop(0, '#FFE066'); 
+        edgeGrad.addColorStop(0.5, '#B8860B'); 
+        edgeGrad.addColorStop(1, '#FFD700'); 
+        ctx.fillStyle = edgeGrad;
+        ctx.fill();
+        ctx.strokeStyle = '#FFFFFF'; 
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(0, 0, radius * 0.82, 0, Math.PI * 2);
+        ctx.fillStyle = '#8B6508'; 
+        ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#FFD700';
+        ctx.stroke();
+
+        const innerR = radius * 0.60;
+        const outerR = radius * 0.78;
+        ctx.beginPath();
+        ctx.arc(0, 0, innerR, 0, Math.PI * 2);
+        ctx.fillStyle = '#DAA520';
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.strokeStyle = '#3E2723'; 
+        ctx.lineWidth = 2;
+        const numXs = 36;
+        for(let i=0; i<numXs; i++) {
+            const a1 = (i * Math.PI * 2) / numXs;
+            const a2 = ((i+0.5) * Math.PI * 2) / numXs;
+            ctx.beginPath();
+            ctx.moveTo(Math.cos(a1)*innerR, Math.sin(a1)*innerR);
+            ctx.lineTo(Math.cos(a2)*outerR, Math.sin(a2)*outerR);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(Math.cos(a2)*innerR, Math.sin(a2)*innerR);
+            ctx.lineTo(Math.cos(a1)*outerR, Math.sin(a1)*outerR);
+            ctx.stroke();
+        }
+
+        ctx.beginPath();
+        ctx.arc(0, 0, radius * 0.45, 0, Math.PI * 2);
+        const hubGrad = ctx.createRadialGradient(0, 0, radius * 0.1, 0, 0, radius * 0.45);
+        hubGrad.addColorStop(0, '#FFD700');
+        hubGrad.addColorStop(1, '#B8860B');
+        ctx.fillStyle = hubGrad;
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.stroke();
+
+        ctx.fillStyle = '#3E2723';
+        for(let i=0; i<16; i++) {
+            const angle = (i * Math.PI * 2) / 16;
+            ctx.beginPath();
+            ctx.arc(Math.cos(angle) * radius * 0.35, Math.sin(angle) * radius * 0.35, radius * 0.03, 0, Math.PI*2);
+            ctx.fill();
+        }
+
+        ctx.beginPath();
+        ctx.arc(0, 0, radius * 0.18, 0, Math.PI * 2);
+        const domeGrad = ctx.createRadialGradient(
+            radius * -0.05, radius * -0.05, radius * 0.01, 
+            0, 0, radius * 0.18
+        );
+        domeGrad.addColorStop(0, '#FFFFFF'); 
+        domeGrad.addColorStop(0.2, '#FF4500'); 
+        domeGrad.addColorStop(0.8, '#8B0000'); 
+        domeGrad.addColorStop(1, '#3E0000'); 
+        ctx.fillStyle = domeGrad;
+        ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(255, 215, 0, 0.8)';
+        ctx.stroke();
+    }
+
+    // --- Render Loop (60 FPS) ---
+    function render() {
+        canvasCtx.save(); // Global save for screen shake
+
+        // Screen Shake
+        if (shakeFrames > 0) {
+            const intensity = (shakeFrames / 20) * 45; 
+            const dx = (Math.random() - 0.5) * intensity;
+            const dy = (Math.random() - 0.5) * intensity;
+            canvasCtx.translate(dx, dy);
+            shakeFrames--;
+        }
+
+        if (latestImage) {
+            canvasCtx.drawImage(latestImage, 0, 0, canvasElement.width, canvasElement.height);
+        }
+
+        // --- Render the VISPHOT (Blast Wave) ---
+        if (blastAlpha > 0) {
+            canvasCtx.save();
+            const cx = canvasElement.width / 2;
+            const cy = canvasElement.height / 2;
+            
+            const blastGrad = canvasCtx.createRadialGradient(cx, cy, 0, cx, cy, blastRadius);
+            blastGrad.addColorStop(0, `rgba(255, 255, 255, ${blastAlpha})`);     // Pure white core
+            blastGrad.addColorStop(0.2, `rgba(255, 215, 0, ${blastAlpha})`);    // Gold
+            blastGrad.addColorStop(0.6, `rgba(255, 69, 0, ${blastAlpha})`);     // Fire Red
+            blastGrad.addColorStop(1, `rgba(0, 0, 0, 0)`);
+            
+            canvasCtx.fillStyle = blastGrad;
+            canvasCtx.globalCompositeOperation = 'screen';
+            canvasCtx.beginPath();
+            canvasCtx.arc(cx, cy, blastRadius, 0, Math.PI * 2);
+            canvasCtx.fill();
+            canvasCtx.restore();
+
+            blastRadius += 80; // Expand rapidly
+            blastAlpha -= 0.03; // Fade out slowly
+        }
+
+        // --- Logic Engine depending on State ---
+        if (chakraState === 'ATTACHED') {
+            currentTipX += (targetTipX - currentTipX) * 0.4;
+            currentTipY += (targetTipY - currentTipY) * 0.4;
+            currentMcpX += (targetMcpX - currentMcpX) * 0.4;
+            currentMcpY += (targetMcpY - currentMcpY) * 0.4;
+            yCompression += (targetYCompression - yCompression) * 0.2;
+        } 
+        else if (chakraState === 'THROWN') {
+            throwTime += 0.15;
+            
+            // Random Motion Path Math (Chaotic wobble)
+            const wobbleX = Math.sin(throwTime * 5) * 200;
+            const wobbleY = Math.cos(throwTime * 4.3) * 200;
+            
+            // Fly toward center + wobble
+            const destX = (canvasElement.width / 2) + wobbleX;
+            const destY = (canvasElement.height / 2) + wobbleY;
+
+            currentTipX += (destX - currentTipX) * 0.12;
+            currentTipY += (destY - currentTipY) * 0.12;
+            
+            // Flatten out to face camera
+            yCompression += (targetYCompression - yCompression) * 0.08; 
+
+            // Trigger Impact when compression is near flat (ensures it got big and faced us)
+            if (Math.abs(yCompression - 1.0) < 0.05) {
+                chakraState = 'STUCK';
+                
+                // Snap to absolute center
+                currentTipX = canvasElement.width / 2;
+                currentTipY = canvasElement.height / 2;
+
+                shakeFrames = 35; // Huge screen shake
+                stuckTimer = 100; // Time stuck on screen
+                
+                // Trigger Blast Wave
+                blastRadius = 20;
+                blastAlpha = 1.0;
+
+                if (strikeMusic.src) {
+                    strikeMusic.currentTime = 0;
+                    strikeMusic.play().catch(e => console.log(e));
+                }
+
+                explodeParticles(currentTipX, currentTipY, 300, 6); // Massive explosion
+            }
+        } 
+        else if (chakraState === 'STUCK') {
+            stuckTimer--;
+            if (stuckTimer <= 0) {
+                chakraState = 'IDLE'; 
+                targetScale = 0;
+                explodeParticles(currentTipX, currentTipY, 50, 2);
+            }
+        }
+
+        // --- Shared Physics ---
+        scaleVelocity += (targetScale - currentScale) * tension;
+        scaleVelocity *= friction;
+        currentScale += scaleVelocity;
+        if (currentScale < 0) currentScale = 0;
+
+        rotationAngle += 0.4; 
+
+        // --- Draw Chakra ---
+        if (currentScale > 0.01) {
+            canvasCtx.save();
+            canvasCtx.translate(currentTipX, currentTipY);
+            
+            let renderAngle = 0;
+            if (chakraState === 'ATTACHED') {
+                const dx = currentTipX - currentMcpX;
+                const dy = currentTipY - currentMcpY;
+                renderAngle = Math.atan2(dy, dx) + Math.PI / 2;
+            } else {
+                renderAngle = frozenFingerAngle;
+            }
+
+            canvasCtx.rotate(renderAngle);
+            canvasCtx.scale(currentScale, currentScale);
+
+            canvasCtx.save();
+            canvasCtx.scale(1, 0.4); 
+            canvasCtx.beginPath();
+            canvasCtx.arc(0, 0, baseRadius * 1.8, 0, Math.PI * 2);
+            const auraGrad = canvasCtx.createRadialGradient(0, 0, baseRadius * 0.4, 0, 0, baseRadius * 1.8);
+            auraGrad.addColorStop(0, 'rgba(138, 43, 226, 0.9)'); 
+            auraGrad.addColorStop(0.5, 'rgba(75, 0, 130, 0.5)');  
+            auraGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');         
+            canvasCtx.fillStyle = auraGrad;
+            canvasCtx.globalCompositeOperation = 'screen';
+            canvasCtx.fill();
+            canvasCtx.restore();
+
+            canvasCtx.scale(1, yCompression); 
+            
+            canvasCtx.shadowColor = '#FFD700';
+            canvasCtx.shadowBlur = (chakraState === 'STUCK') ? 80 : 20; // Massive glow on strike
+
+            canvasCtx.rotate(rotationAngle);
+            drawDetailedChakra(canvasCtx, baseRadius);
+
+            canvasCtx.restore();
+        }
+
+        for (let i = particles.length - 1; i >= 0; i--) {
+            particles[i].update();
+            particles[i].draw(canvasCtx);
+            if (particles[i].life <= 0) particles.splice(i, 1);
+        }
+
+        canvasCtx.restore(); 
+        requestAnimationFrame(render);
+    }
+
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6
+    });
+    hands.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+        onFrame: async () => { await hands.send({image: videoElement}); },
+        width: 1280, height: 720
+    });
+
+    camera.start();
+    requestAnimationFrame(render);
+
+</script>
+</body>
+</html>

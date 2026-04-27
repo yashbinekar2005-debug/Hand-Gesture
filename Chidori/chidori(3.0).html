@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHIDORI: OVERDRIVE</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+
+    <!-- MediaPipe Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        :root {
+            --neon-cyan: #00f3ff;
+            --neon-white: #e0ffff;
+            --dark-bg: #000000;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--dark-bg);
+            font-family: 'Orbitron', sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #canvas-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            /* CSS Mirroring for visual check, logic mirroring handled in JS */
+            transform: scaleX(-1); 
+        }
+
+        .input_video { display: none; }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            z-index: 10;
+        }
+
+        header {
+            text-align: center;
+            padding: 20px;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+        }
+
+        h1 {
+            font-weight: 900;
+            font-size: 2.5rem;
+            margin: 0;
+            color: #fff;
+            text-transform: uppercase;
+            letter-spacing: 6px;
+            text-shadow: 0 0 10px var(--neon-cyan), 0 0 30px var(--neon-cyan);
+            font-style: italic;
+        }
+
+        .subtitle {
+            font-size: 1rem;
+            color: var(--neon-cyan);
+            letter-spacing: 3px;
+            margin-top: 5px;
+            font-weight: 700;
+            text-shadow: 0 0 5px var(--neon-cyan);
+        }
+
+        #start-screen {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.95);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            pointer-events: auto;
+        }
+
+        button#start-btn {
+            background: transparent;
+            color: var(--neon-cyan);
+            border: 2px solid var(--neon-cyan);
+            padding: 20px 50px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.8rem;
+            font-weight: 900;
+            cursor: pointer;
+            text-transform: uppercase;
+            box-shadow: 0 0 20px var(--neon-cyan), inset 0 0 20px var(--neon-cyan);
+            transition: 0.2s;
+        }
+
+        button#start-btn:hover {
+            background: var(--neon-cyan);
+            color: black;
+            box-shadow: 0 0 50px var(--neon-cyan), 0 0 100px var(--neon-white);
+        }
+
+        /* HUD */
+        #hud-footer {
+            padding: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .hand-status {
+            width: 350px;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .hand-label {
+            font-size: 0.9rem;
+            color: var(--neon-cyan);
+            display: flex;
+            justify-content: space-between;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .bar-container {
+            width: 100%;
+            height: 12px;
+            background: #000;
+            border: 2px solid #333;
+            transform: skewX(-20deg);
+            overflow: hidden;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+
+        .bar-fill {
+            height: 100%;
+            width: 0%;
+            background: var(--neon-cyan);
+            box-shadow: 0 0 15px var(--neon-cyan);
+            transition: width 0.05s linear;
+        }
+
+        .overdrive .bar-fill {
+            background: #fff;
+            box-shadow: 0 0 30px #fff;
+        }
+
+        .status-text {
+            font-size: 0.8rem;
+            color: #666;
+            margin-top: 5px;
+            text-align: right;
+            font-weight: bold;
+        }
+
+    </style>
+</head>
+<body>
+
+    <video class="input_video"></video>
+
+    <div id="canvas-container">
+        <canvas id="output_canvas"></canvas>
+        <div id="ui-layer">
+            <header>
+                <h1>Chidori</h1>
+                <div class="subtitle">LIGHTNING STYLE // OVERDRIVE</div>
+            </header>
+
+            <div id="hud-footer">
+                <div class="hand-status" id="hud-left">
+                    <div class="hand-label"><span>LEFT HAND</span> <span id="val-left">0%</span></div>
+                    <div class="bar-container">
+                        <div class="bar-fill" id="bar-left"></div>
+                    </div>
+                    <div class="status-text" id="status-left">GATHERING CHAKRA</div>
+                </div>
+
+                <div class="hand-status" id="hud-right">
+                    <div class="hand-label"><span>RIGHT HAND</span> <span id="val-right">0%</span></div>
+                    <div class="bar-container">
+                        <div class="bar-fill" id="bar-right"></div>
+                    </div>
+                    <div class="status-text" id="status-right">GATHERING CHAKRA</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="start-screen">
+        <button id="start-btn">ACTIVATE JUTSU</button>
+    </div>
+
+    <script>
+        // --- Configuration ---
+        const MAX_CHARGE = 60;
+        const DECAY_RATE = 3;
+        
+        // --- Core Systems ---
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        
+        let handState = {
+            Left: { charge: 0, present: false, pos: {x:0, y:0}, prevPos: {x:0,y:0}, wrist: {x:0,y:0} },
+            Right: { charge: 0, present: false, pos: {x:0, y:0}, prevPos: {x:0,y:0}, wrist: {x:0,y:0} }
+        };
+
+        // Particle System for Sparks
+        let particles = [];
+
+        // --- Math & VFX Helpers ---
+
+        function random(min, max) { return Math.random() * (max - min) + min; }
+
+        /**
+         * Generates points for a lightning bolt using Fractal Midpoint Displacement
+         * @param {Object} start {x,y}
+         * @param {Object} end {x,y}
+         * @param {Number} displace - How erratic the bolt is
+         * @param {Number} iterations - Detail level (recursion depth)
+         */
+        function getLightningPoints(start, end, displace, iterations) {
+            if (iterations === 0) return [start, end];
+
+            const midX = (start.x + end.x) / 2;
+            const midY = (start.y + end.y) / 2;
+
+            // Calculate Normal
+            const dx = end.x - start.x;
+            const dy = end.y - start.y;
+            const len = Math.sqrt(dx*dx + dy*dy);
+            const nx = -dy/len; // perpendicular x
+            const ny = dx/len;  // perpendicular y
+
+            // Jitter
+            const offset = (Math.random() - 0.5) * displace;
+            
+            const midPoint = {
+                x: midX + nx * offset,
+                y: midY + ny * offset
+            };
+
+            const left = getLightningPoints(start, midPoint, displace/2, iterations-1);
+            const right = getLightningPoints(midPoint, end, displace/2, iterations-1);
+
+            return left.concat(right.slice(1));
+        }
+
+        function drawLightning(ctx, points, color, width, glow) {
+            if(points.length < 2) return;
+
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for(let i=1; i<points.length; i++){
+                ctx.lineTo(points[i].x, points[i].y);
+            }
+            
+            // Outer Glow
+            ctx.shadowBlur = glow;
+            ctx.shadowColor = color;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.stroke();
+
+            // Inner Core (Hot White)
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = width * 0.4;
+            ctx.stroke();
+        }
+
+        // --- Particle System ---
+        class Spark {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = random(5, 15);
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+                this.life = 1.0;
+                this.decay = random(0.05, 0.1);
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life -= this.decay;
+            }
+            draw(ctx) {
+                ctx.fillStyle = `rgba(200, 255, 255, ${this.life})`;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, random(1, 3), 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // --- Main Logic ---
+
+        function onResults(results) {
+            // Resize canvas to match window
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+            
+            canvasCtx.save();
+            
+            // Mirroring Setup
+            canvasCtx.scale(-1, 1);
+            canvasCtx.translate(-canvasElement.width, 0);
+
+            // 1. Calculate Global Chaos (Screen Shake)
+            let maxCharge = Math.max(handState.Left.charge, handState.Right.charge);
+            let chaosLevel = maxCharge / MAX_CHARGE; // 0.0 to 1.0
+
+            if (chaosLevel > 0.8) {
+                // Aggressive Shake
+                const shakeAmp = Math.pow(chaosLevel * 10, 2); // Exponential shake
+                const sx = (Math.random() - 0.5) * shakeAmp;
+                const sy = (Math.random() - 0.5) * shakeAmp;
+                canvasCtx.translate(sx, sy);
+            }
+
+            // 2. Draw Video
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            // 3. Global Flash Effect (Strobing at max power)
+            if (chaosLevel >= 0.95 && Math.random() > 0.8) {
+                canvasCtx.fillStyle = 'rgba(255, 255, 255, 0.2)'; // White flash
+                canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+                // Occasionally invert colors for impact
+                if(Math.random() > 0.7) canvasCtx.globalCompositeOperation = 'difference';
+            }
+
+            // 4. Update Logic & Draw VFX
+            updateHands(results);
+            drawChidori(chaosLevel);
+
+            canvasCtx.restore();
+        }
+
+        function updateHands(results) {
+            handState.Left.present = false;
+            handState.Right.present = false;
+
+            if (results.multiHandLandmarks) {
+                for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                    const landmarks = results.multiHandLandmarks[i];
+                    const label = results.multiHandedness[i].label; // Left or Right
+                    
+                    const s = handState[label];
+                    s.present = true;
+                    s.prevPos = { ...s.pos };
+                    s.pos = { x: landmarks[9].x * canvasElement.width, y: landmarks[9].y * canvasElement.height }; // Middle Finger MCP
+                    s.wrist = { x: landmarks[0].x * canvasElement.width, y: landmarks[0].y * canvasElement.height };
+
+                    // Charge Logic
+                    if (s.charge < MAX_CHARGE) s.charge += 1.5; // Faster charge
+                }
+            }
+
+            // Decay Logic
+            ['Left', 'Right'].forEach(h => {
+                if (!handState[h].present) handState[h].charge = Math.max(0, handState[h].charge - DECAY_RATE);
+                updateHUD(h);
+            });
+        }
+
+        function drawChidori(globalChaos) {
+            ['Left', 'Right'].forEach(hand => {
+                const s = handState[hand];
+                if (s.charge < 5) return;
+
+                const intensity = s.charge / MAX_CHARGE;
+                const x = s.pos.x;
+                const y = s.pos.y;
+
+                // --- CORE ORB ---
+                // Simulating a dense ball of plasma
+                const flicker = random(0.8, 1.2);
+                const radius = (20 + (intensity * 60)) * flicker;
+                
+                // Outer haze
+                const grad = canvasCtx.createRadialGradient(x, y, 10, x, y, radius * 1.5);
+                grad.addColorStop(0, `rgba(255, 255, 255, ${intensity})`);
+                grad.addColorStop(0.3, `rgba(0, 243, 255, ${intensity * 0.9})`);
+                grad.addColorStop(1, `rgba(0, 100, 255, 0)`);
+                
+                canvasCtx.globalCompositeOperation = 'screen'; // Additive blending
+                canvasCtx.fillStyle = grad;
+                canvasCtx.beginPath();
+                canvasCtx.arc(x, y, radius * 1.5, 0, Math.PI * 2);
+                canvasCtx.fill();
+                canvasCtx.globalCompositeOperation = 'source-over';
+
+                // --- LIGHTNING BOLT GENERATION ---
+                
+                // 1. Contained Bolts (Inside the sphere)
+                // High frequency, low distance
+                const coreBolts = 5 + Math.floor(intensity * 10);
+                for(let i=0; i<coreBolts; i++) {
+                    const angle = random(0, Math.PI*2);
+                    const dist = random(10, radius);
+                    const end = { x: x + Math.cos(angle)*dist, y: y + Math.sin(angle)*dist };
+                    const pts = getLightningPoints({x,y}, end, 15, 3);
+                    drawLightning(canvasCtx, pts, '#00FFFF', 2, 10);
+                }
+
+                // 2. WILD ARCS (The "Aggressive" part)
+                // Bolts shooting way out
+                if (intensity > 0.5) {
+                    const wildBolts = 15 + Math.floor(intensity * 25); // Up to 40 bolts
+                    
+                    for(let i=0; i<wildBolts; i++) {
+                        const angle = random(0, Math.PI*2);
+                        // Random length, some super long
+                        const len = random(radius, Math.max(canvasElement.width, canvasElement.height) * 0.8);
+                        
+                        // Jitter the start point so they don't all look like a pinwheel
+                        const startJitter = { 
+                            x: x + (Math.random()-0.5)*40, 
+                            y: y + (Math.random()-0.5)*40 
+                        };
+                        
+                        const end = { 
+                            x: startJitter.x + Math.cos(angle) * len, 
+                            y: startJitter.y + Math.sin(angle) * len 
+                        };
+
+                        // High displacement for "jagged" look
+                        const displacement = 60 + (intensity * 100); 
+                        const pts = getLightningPoints(startJitter, end, displacement, 5);
+                        
+                        // Randomize thickness
+                        const thick = random(1, 4);
+                        // Randomize color (Cyan vs Blue vs White)
+                        const colorType = Math.random();
+                        let col = '#00f3ff';
+                        if(colorType > 0.7) col = '#ffffff'; // Hot white
+                        if(colorType < 0.2) col = '#0066ff'; // Deep blue
+
+                        drawLightning(canvasCtx, pts, col, thick, 20);
+                    }
+                }
+
+                // 3. ARM CRAWL (Grounding to body)
+                // Vector from wrist to elbow direction
+                if(intensity > 0.3) {
+                    const vx = s.wrist.x - x;
+                    const vy = s.wrist.y - y;
+                    const mag = Math.sqrt(vx*vx + vy*vy);
+                    if(mag > 0) {
+                        const nx = vx/mag;
+                        const ny = vy/mag;
+                        // Project backwards significantly
+                        const backX = s.wrist.x + nx * 1000;
+                        const backY = s.wrist.y + ny * 1000;
+                        
+                        // Multiple crawling bolts
+                        for(let k=0; k<5; k++) {
+                            const spread = 80; // Wide arm spread
+                            const dest = {
+                                x: backX + (Math.random()-0.5)*spread,
+                                y: backY + (Math.random()-0.5)*spread
+                            };
+                            const pts = getLightningPoints(s.wrist, dest, 50, 6);
+                            drawLightning(canvasCtx, pts, '#00ccff', 3, 15);
+                        }
+                    }
+                }
+
+                // 4. PARTICLE SPARKS
+                if(intensity > 0.4) {
+                    // Emit new sparks
+                    const spawnCount = Math.floor(intensity * 5);
+                    for(let i=0; i<spawnCount; i++){
+                        particles.push(new Spark(x, y));
+                    }
+                }
+            });
+
+            // Update & Draw Particles
+            for(let i=particles.length-1; i>=0; i--) {
+                const p = particles[i];
+                p.update();
+                p.draw(canvasCtx);
+                if(p.life <= 0) particles.splice(i, 1);
+            }
+        }
+
+        // --- UI ---
+        function updateHUD(hand) {
+            const el = document.getElementById(`hud-${hand.toLowerCase()}`);
+            const bar = document.getElementById(`bar-${hand.toLowerCase()}`);
+            const val = document.getElementById(`val-${hand.toLowerCase()}`);
+            const stat = document.getElementById(`status-${hand.toLowerCase()}`);
+            const data = handState[hand];
+
+            // Fade in/out
+            if(data.charge > 0 || data.present) el.style.opacity = 1;
+            else el.style.opacity = 0;
+
+            const pct = Math.floor((data.charge / MAX_CHARGE) * 100);
+            bar.style.width = `${pct}%`;
+            val.innerText = `${pct}%`;
+
+            if(pct >= 100) {
+                stat.innerText = "CRITICAL MASS // UNSTABLE";
+                stat.style.color = "#FFF";
+                el.classList.add('overdrive');
+            } else {
+                stat.innerText = "AMPLIFYING CURRENT...";
+                stat.style.color = "#666";
+                el.classList.remove('overdrive');
+            }
+        }
+
+        // --- Initialization ---
+
+        function init() {
+            document.getElementById('start-screen').style.display = 'none';
+
+            const hands = new Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }});
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.6
+            });
+
+            hands.onResults(onResults);
+
+            const camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 1280,
+                height: 720
+            });
+
+            camera.start();
+        }
+
+        document.getElementById('start-btn').addEventListener('click', init);
+        window.addEventListener('resize', () => {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+        });
+
+    </script>
+</body>
+</html>

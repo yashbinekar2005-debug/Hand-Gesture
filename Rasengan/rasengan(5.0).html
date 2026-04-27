@@ -1,0 +1,521 @@
+<!-- \<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chakra Control: Rasengan AR</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #0a0a0c; font-family: 'Segoe UI', sans-serif; }
+        canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; transform: scaleX(-1); }
+        video { display: none; }
+
+        #ui-layer {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            z-index: 10;
+        }
+
+        #header {
+            margin-top: 30px;
+            text-align: center;
+            color: #00d2ff;
+            text-shadow: 0 0 15px #0066ff;
+            font-size: 28px;
+            font-weight: bold;
+            letter-spacing: 6px;
+        }
+
+        #btn-start {
+            pointer-events: auto;
+            margin-bottom: 80px;
+            padding: 18px 45px;
+            background: linear-gradient(135deg, #0066ff, #00d2ff);
+            color: white;
+            border: 2px solid #fff;
+            border-radius: 50px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 0 25px rgba(0, 210, 255, 0.5);
+            transition: 0.3s ease;
+        }
+
+        #btn-start:hover { transform: scale(1.05); box-shadow: 0 0 40px #00d2ff; }
+
+        .charge-area {
+            display: flex;
+            width: 90%;
+            justify-content: space-around;
+            margin-bottom: 30px;
+        }
+
+        .bar-container { width: 250px; height: 8px; background: rgba(255,255,255,0.1); border-radius: 10px; overflow: hidden; border: 1px solid #00d2ff; }
+        .bar-fill { width: 0%; height: 100%; background: #00d2ff; box-shadow: 0 0 10px #00d2ff; transition: width 0.1s; }
+    </style>
+</head>
+<body>
+
+    <video id="input_video"></video>
+    <canvas id="output_canvas"></canvas>
+
+    <div id="ui-layer">
+        <div id="header">RASENGAN GENERATOR</div>
+        
+        <button id="btn-start">CONCENTRATE CHAKRA</button>
+
+        <div class="charge-area">
+            <div><div class="bar-container"><div id="fill-0" class="bar-fill"></div></div></div>
+            <div><div class="bar-container"><div id="fill-1" class="bar-fill"></div></div></div>
+        </div>
+    </div>
+
+<script>
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const startBtn = document.getElementById('btn-start');
+
+    let handStates = [
+        { charge: 0, active: false, x: 0, y: 0, size: 0, baseSize: 0 },
+        { charge: 0, active: false, x: 0, y: 0, size: 0, baseSize: 0 }
+    ];
+
+    // Timing Constants
+    const GROWTH_START = 90; // Starts growing after 3 seconds (assuming 30fps)
+    const MAX_CHARGE = 150;  // Fully grown at 5 seconds
+
+    function onResults(results) {
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+
+        canvasCtx.save();
+        
+        // Draw the mirrored camera frame
+        canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+        handStates.forEach(h => h.active = false);
+
+        if (results.multiHandLandmarks) {
+            for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                const landmarks = results.multiHandLandmarks[i];
+                const handedness = results.multiHandedness[i].label === 'Left' ? 0 : 1;
+                const state = handStates[handedness];
+
+                // Anchor to Palm (Landmark 9)
+                state.x = landmarks[9].x * canvasElement.width;
+                state.y = landmarks[9].y * canvasElement.height;
+                
+                // Calculate size based on distance from wrist to knuckle
+                const dx = (landmarks[0].x - landmarks[9].x) * canvasElement.width;
+                const dy = (landmarks[0].y - landmarks[9].y) * canvasElement.height;
+                state.baseSize = Math.sqrt(dx*dx + dy*dy) * 1.4;
+
+                // Growth Logic: 1.0x to 2.0x
+                let multiplier = 1.0;
+                if (state.charge > GROWTH_START) {
+                    const progress = (state.charge - GROWTH_START) / (MAX_CHARGE - GROWTH_START);
+                    multiplier = 1.0 + progress; 
+                }
+                state.size = state.baseSize * multiplier;
+
+                state.active = true;
+                state.charge = Math.min(MAX_CHARGE, state.charge + 1);
+
+                // Update UI bar
+                document.getElementById(`fill-${handedness}`).style.width = (state.charge / MAX_CHARGE * 100) + '%';
+                
+                drawRasengan(state);
+            }
+        }
+
+        // Decay charge if hand is hidden
+        handStates.forEach((h, index) => {
+            if (!h.active) {
+                h.charge = Math.max(0, h.charge - 3);
+                document.getElementById(`fill-${index}`).style.width = (h.charge / MAX_CHARGE * 100) + '%';
+            }
+        });
+
+        canvasCtx.restore();
+    }
+
+    function drawRasengan(state) {
+        const { x, y, size } = state;
+        const time = Date.now() * 0.004;
+
+        canvasCtx.globalCompositeOperation = 'lighter';
+
+        // 1. Core Glow (The Dense Center)
+        const coreGrad = canvasCtx.createRadialGradient(x, y, 0, x, y, size);
+        coreGrad.addColorStop(0, '#ffffff');
+        coreGrad.addColorStop(0.15, '#b0eaff');
+        coreGrad.addColorStop(0.4, 'rgba(0, 150, 255, 0.4)');
+        coreGrad.addColorStop(1, 'transparent');
+
+        canvasCtx.fillStyle = coreGrad;
+        canvasCtx.beginPath();
+        canvasCtx.arc(x, y, size, 0, Math.PI * 2);
+        canvasCtx.fill();
+
+        // 2. Swirling Chakra Strands (Chaotic Wind)
+        canvasCtx.lineWidth = 2;
+        for (let i = 0; i < 8; i++) {
+            canvasCtx.beginPath();
+            const opacity = 0.3 + Math.random() * 0.4;
+            canvasCtx.strokeStyle = `rgba(135, 206, 250, ${opacity})`;
+            
+            // Jittery, unstable orbits
+            const r = size * (0.4 + Math.random() * 0.55);
+            const rot = time * (i + 1) + (Math.random() * 0.2);
+            canvasCtx.ellipse(x, y, r, r * (0.3 + Math.random() * 0.2), rot, 0, Math.PI * 2);
+            canvasCtx.stroke();
+        }
+
+        // 3. Inward Suction Particles
+        drawInwardParticles(x, y, size);
+    }
+
+    function drawInwardParticles(x, y, size) {
+        for (let i = 0; i < 6; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const startDist = size * (1.5 + Math.random());
+            const endDist = size * 0.2;
+            
+            // Particle moves inward
+            const progress = (Date.now() % 1000) / 1000;
+            const currentDist = startDist - (startDist - endDist) * progress;
+
+            canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+            canvasCtx.lineWidth = 1;
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(x + Math.cos(angle) * currentDist, y + Math.sin(angle) * currentDist);
+            canvasCtx.lineTo(x + Math.cos(angle) * (currentDist + 10), y + Math.sin(angle) * (currentDist + 10));
+            canvasCtx.stroke();
+        }
+    }
+
+    const hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.7
+    });
+
+    hands.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 1280,
+        height: 720
+    });
+
+    startBtn.addEventListener('click', () => {
+        startBtn.style.display = 'none';
+        camera.start();
+    });
+</script>
+</body>
+</html> -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wind Style: Rasengan AR</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; }
+        canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; transform: scaleX(-1); }
+        video { display: none; }
+
+        /* Naruto Themed UI */
+        #ui-layer {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            z-index: 10;
+        }
+
+        #header {
+            margin-top: 20px;
+            text-align: center;
+            color: #ff9d00;
+            text-shadow: 0 0 20px #ff0000, 2px 2px #000;
+            font-size: 24px;
+            font-weight: bold;
+            letter-spacing: 4px;
+        }
+
+        #btn-start {
+            pointer-events: auto;
+            margin-bottom: 100px;
+            padding: 20px 50px;
+            background: linear-gradient(45deg, #ff4e00, #ff9d00);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 0 30px rgba(255, 78, 0, 0.6);
+            transition: 0.3s;
+            border: 2px solid #fff;
+        }
+
+        #btn-start:hover { transform: scale(1.1); box-shadow: 0 0 50px #ff4e00; }
+
+        .charge-bars {
+            display: flex;
+            width: 80%;
+            justify-content: space-around;
+            margin-bottom: 20px;
+        }
+
+        .bar-container { width: 300px; height: 10px; background: rgba(0,0,0,0.5); border: 1px solid #0ff; }
+        .bar-fill { width: 0%; height: 100%; background: #0ff; box-shadow: 0 0 15px #0ff; transition: width 0.1s; }
+    </style>
+</head>
+<body>
+
+    <video id="input_video"></video>
+    <canvas id="output_canvas"></canvas>
+
+    <div id="ui-layer">
+        <div id="header">WIND STYLE: RASENGAN</div>
+        
+        <button id="btn-start">INITIALIZE CHAKRA</button>
+
+        <div class="charge-bars">
+            <div><div class="bar-container"><div id="fill-0" class="bar-fill"></div></div></div>
+            <div><div class="bar-container"><div id="fill-1" class="bar-fill"></div></div></div>
+        </div>
+    </div>
+
+<script>
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const startBtn = document.getElementById('btn-start');
+
+    let handStates = [
+        { charge: 0, active: false, x: 0, y: 0, size: 0, baseSize: 0 },
+        { charge: 0, active: false, x: 0, y: 0, size: 0, baseSize: 0 }
+    ];
+
+    // Corrected Timing: 30fps * 3s = 90. Max growth at 150 (5s total).
+    const GROWTH_START = 90; 
+    const MAX_CHARGE = 150; 
+    let screenShake = 0;
+
+    function onResults(results) {
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+
+        canvasCtx.save();
+        
+        if (screenShake > 0) {
+            canvasCtx.translate(Math.random() * screenShake - screenShake/2, Math.random() * screenShake - screenShake/2);
+            screenShake *= 0.9;
+        }
+
+        // Draw camera feed
+        canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+        handStates.forEach(h => h.active = false);
+
+        if (results.multiHandLandmarks) {
+            for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                const landmarks = results.multiHandLandmarks[i];
+                const handedness = results.multiHandedness[i].label === 'Left' ? 0 : 1;
+                const state = handStates[handedness];
+
+                state.x = landmarks[9].x * canvasElement.width;
+                state.y = landmarks[9].y * canvasElement.height;
+                
+                // Calculate Base Hand Size
+                const dx = (landmarks[0].x - landmarks[9].x) * canvasElement.width;
+                const dy = (landmarks[0].y - landmarks[9].y) * canvasElement.height;
+                state.baseSize = Math.sqrt(dx*dx + dy*dy) * 1.5;
+
+                state.active = true;
+                state.charge = Math.min(MAX_CHARGE, state.charge + 1);
+
+                // Growth Logic
+                let multiplier = 1.0;
+                if (state.charge > GROWTH_START) {
+                    const progress = (state.charge - GROWTH_START) / (MAX_CHARGE - GROWTH_START);
+                    multiplier = 1.0 + progress; // Scaled up to 2.0x
+                    screenShake = 2; // Subtle vibration during growth
+                }
+                state.size = state.baseSize * multiplier;
+
+                // Update UI Progress Bar
+                document.getElementById(`fill-${handedness}`).style.width = (state.charge / MAX_CHARGE * 100) + '%';
+                
+                drawRasengan(state);
+            }
+        }
+
+        handStates.forEach((h, index) => {
+            if (!h.active) {
+                h.charge = Math.max(0, h.charge - 2);
+                document.getElementById(`fill-${index}`).style.width = (h.charge / MAX_CHARGE * 100) + '%';
+            }
+        });
+
+        canvasCtx.restore();
+    }
+
+    function drawRasengan(state) {
+        const { x, y, size } = state;
+        const time = Date.now() * 0.005;
+
+        // canvasCtx.globalCompositeOperation = 'lighter';
+
+        // 1. Core Gradient
+        const coreGrad = canvasCtx.createRadialGradient(x, y, 0, x, y, size);
+        coreGrad.addColorStop(0, '#fff');
+        coreGrad.addColorStop(0.2, '#87CEEB');
+        coreGrad.addColorStop(0.4, 'rgba(255, 255, 255, 0.8)');
+        coreGrad.addColorStop(1, 'transparent');
+
+        canvasCtx.fillStyle = coreGrad;
+        canvasCtx.beginPath();
+        canvasCtx.arc(x, y, size, 0, Math.PI * 2);
+        canvasCtx.fill();
+
+        // // 2. Swirling Chakra (Wind Style)
+        // canvasCtx.lineWidth = 2;
+        // for (let i = 0; i < 6; i++) {
+        //     canvasCtx.beginPath();
+        //     canvasCtx.strokeStyle = `rgba(255, 255, 255, ${0.4 + Math.random() * 0.4})`;
+        //     const r = size * (0.4 + Math.random() * 0.5);
+        //     const rot = time * (i + 1);
+        //     // ellipse(x, y, radiusX, radiusY, rotation, startAngle, endAngle)
+        //     canvasCtx.ellipse(x, y, r, r * 0.5, rot, 0, Math.PI * 2);
+        //     canvasCtx.stroke();
+        // }
+
+        // // 2. Swirling Chakra (Dense Sphere)
+        // const numLines = 80; // Significantly increased for density
+        // canvasCtx.lineWidth = 0.6; // Very fine lines
+        
+        // // Add a glow effect to the lines
+        // canvasCtx.shadowBlur = 20;
+        // canvasCtx.shadowColor = '#00e5ff'; // Bright cyan glow
+
+        // for (let i = 0; i < numLines; i++) {
+        //     canvasCtx.beginPath();
+        //     // Vary opacity to create depth
+        //     canvasCtx.strokeStyle = `rgba(220, 255, 255, ${0.2 + Math.random() * 0.6})`;
+            
+        //     // Radius mostly stays within the sphere's bounds
+        //     const rX = size * (0.95 + Math.random() * 0.1);
+        //     // Randomize Y-radius to simulate lines wrapping around a 3D sphere
+        //     const rY = rX * (0.1 + Math.random() * 0.9);
+            
+        //     // Chaotic, high-speed rotation for each line
+        //     // Using a large multiplier for speed and 'i' for unique offsets
+        //     const rot = time * (Math.random() > 0.5 ? 1 : -1) * (2 + Math.random() * 3) + i;
+            
+        //     // Draw the ellipse
+        //     canvasCtx.ellipse(x, y, rX, rY, rot, 0, Math.PI * 2);
+        //     canvasCtx.stroke();
+        // }
+        // // Reset shadow so it doesn't affect other parts
+        // canvasCtx.shadowBlur = 0;
+
+        // 2. Swirling Chakra (Dense Sphere) - TIGHT CIRCUMFERENCE
+const numLines = 80; // Significantly increased for density
+canvasCtx.lineWidth = 0.6; // Very fine lines
+
+// Add a glow effect to the lines
+canvasCtx.shadowBlur = 20;
+canvasCtx.shadowColor = '#00e5ff'; // Bright cyan glow
+
+for (let i = 0; i < numLines; i++) {
+    canvasCtx.beginPath();
+    // Vary opacity to create depth
+    canvasCtx.strokeStyle = `rgba(220, 255, 255, ${0.2 + Math.random() * 0.6})`;
+    
+    // RADIUS ADJUSTED: Concentrated to be slightly bigger than the inner globe (1.02x to 1.07x)
+    const rX = size * (0.5 + Math.random() * 0.05);
+    
+    // Randomize Y-radius to simulate lines wrapping around a 3D sphere
+    const rY = rX * (0.1 + Math.random() * 0.9);
+    
+    // Chaotic, high-speed rotation for each line
+    const rot = time * (Math.random() > 0.5 ? 1 : -1) * (2 + Math.random() * 3) + i;
+    
+    // Draw the ellipse
+    canvasCtx.ellipse(x, y, rX, rY, rot, 0, Math.PI * 2);
+    canvasCtx.stroke();
+}
+// Reset shadow so it doesn't affect other parts
+canvasCtx.shadowBlur = 0;
+
+        // 3. Suction Particles
+        drawParticles(x, y, size);
+    }
+
+    function drawParticles(x, y, size) {
+        for (let i = 0; i < 5; i++) {
+            const ang = Math.random() * Math.PI * 2;
+            const len = size * (1.5 + Math.random() * 0.5);
+            canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            canvasCtx.lineWidth = 1;
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(x + Math.cos(ang) * size, y + Math.sin(ang) * size);
+            canvasCtx.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len);
+            canvasCtx.stroke();
+        }
+    }
+
+    const hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6
+    });
+
+    hands.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 1280,
+        height: 720
+    });
+
+    startBtn.addEventListener('click', () => {
+        startBtn.style.display = 'none';
+        camera.start();
+    });
+
+</script>
+</body>
+</html>

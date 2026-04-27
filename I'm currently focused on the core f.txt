@@ -1,0 +1,5 @@
+I'm currently focused on the core features: background segmentation in real-time and hand gesture recognition for clone activation. I've been considering the application of depth sorting and perspective floor for effective clone placement. I'm aiming for a stable base before delving into advanced features.
+Expanding Feature Set
+I'm now thinking about visual polish and interaction. I'm aiming for a "Ninja" aesthetic with blue chakra glow. For example, I'm designing "poof" logic where clones disappear when hit via collision detection. I'm also considering particle effects. I'm focusing on user feedback that demands a more immersive experience, so audio and gameplay elements are also on my mind.
+Refining Clone Mechanics
+I'm now implementing audio cues for immersion, including "POOF" sounds and a jutsu shout. I've scrapped delayed motion due to memory constraints and pivoted to procedural animation with visual glitching. Additionally, I'm integrating a particle system to represent chakra charging before clone spawning, and I'm designing formation modes (wall, circle, line) for user control over clone layout.

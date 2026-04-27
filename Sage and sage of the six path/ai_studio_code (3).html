@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Six Paths Senjutsu: Rikudō Sennin Mode</title>
+    
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Permanent+Marker&display=swap" rel="stylesheet">
+
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        :root {
+            --chakra-gold: #FFD700;
+            --void-black: #050505;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            overflow: hidden;
+            font-family: 'Cinzel', serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        /* Video/Canvas Container */
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* 
+           Essential for iOS/Mobile: 
+           Video must exist but remain hidden 
+        */
+        .input_video { 
+            display: none; 
+            position: absolute;
+            top: 0; left: 0;
+        }
+
+        .output_canvas {
+            position: absolute;
+            left: 0; top: 0;
+            width: 100%; height: 100%;
+            transform: scaleX(-1); /* Mirror Mode */
+            object-fit: cover;
+        }
+
+        /* UI Layer */
+        #ui-layer {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+
+        h1 {
+            color: var(--chakra-gold);
+            text-shadow: 0 0 20px rgba(255, 215, 0, 0.8), 2px 2px 0 #000;
+            font-size: 2rem;
+            margin-top: 20px;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            text-align: center;
+        }
+
+        .sub-text {
+            font-size: 0.8rem;
+            color: #fff;
+            letter-spacing: 2px;
+            opacity: 0.8;
+            margin-top: 5px;
+            background: rgba(0,0,0,0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+
+        /* Loading / Error Overlay */
+        #status-overlay {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: white;
+            z-index: 50;
+            pointer-events: none;
+        }
+        .spinner {
+            border: 4px solid rgba(255, 215, 0, 0.3);
+            border-top: 4px solid var(--chakra-gold);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Controls */
+        #controls-container {
+            text-align: center;
+            width: 100%;
+            pointer-events: auto;
+            margin-bottom: 50px;
+        }
+
+        #transcend-btn {
+            background: transparent;
+            color: var(--chakra-gold);
+            border: 2px solid var(--chakra-gold);
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            font-family: 'Cinzel', serif;
+            cursor: pointer;
+            transition: all 0.5s ease;
+            text-shadow: 0 0 10px var(--chakra-gold);
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.2);
+            position: relative;
+            overflow: hidden;
+        }
+
+        #transcend-btn:hover {
+            background: rgba(255, 215, 0, 0.1);
+            box-shadow: 0 0 30px rgba(255, 215, 0, 0.6);
+        }
+
+        #gesture-hint {
+            margin-bottom: 10px;
+            font-size: 0.9rem;
+            color: #ccc;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.5; }
+            50% { opacity: 1; }
+            100% { opacity: 0.5; }
+        }
+
+        #flash-overlay {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: white;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.1s;
+            z-index: 20;
+        }
+
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <!-- playsinline is crucial for iOS -->
+    <video class="input_video" playsinline muted autoplay></video>
+    <canvas class="output_canvas"></canvas>
+    <div id="flash-overlay"></div>
+    
+    <div id="status-overlay">
+        <div class="spinner"></div>
+        <div id="status-text">Initializing Camera...<br>Please Allow Access</div>
+    </div>
+
+    <div id="ui-layer">
+        <div>
+            <h1>Six Paths Senjutsu</h1>
+            <div class="sub-text">RIKUDŌ SENNIN MODE</div>
+        </div>
+        
+        <div id="controls-container">
+            <div id="gesture-hint">👆 Jutsu Sign: Raise Left Index & Middle Finger</div>
+            <button id="transcend-btn" onclick="app.triggerTransformation()">TRANSCEND</button>
+        </div>
+    </div>
+</div>
+
+<script>
+/**
+ * -----------------------------------------------------------------------
+ * CONFIGURATION & CONSTANTS
+ * -----------------------------------------------------------------------
+ */
+const CONFIG = {
+    colors: {
+        gold: '#FFD700',
+        goldGlow: 'rgba(255, 215, 0, 0.4)',
+        orbGradient: ['#555', '#111', '#000'],
+    },
+    physics: {
+        orbLag: 0.05, 
+        orbRadius: 25,
+        orbDistance: 220
+    }
+};
+
+/**
+ * -----------------------------------------------------------------------
+ * UTILS
+ * -----------------------------------------------------------------------
+ */
+function lerp(start, end, amt) {
+    return (1 - amt) * start + amt * end;
+}
+
+function drawMagatama(ctx, x, y, size, rotation) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    ctx.fillStyle = "#000"; 
+    ctx.beginPath();
+    ctx.arc(0, 0, size, 0, Math.PI * 2);
+    ctx.moveTo(size * 0.8, -size * 0.2);
+    ctx.bezierCurveTo(size * 2, -size * 1.5, size * 0.5, -size * 2.5, 0, -size * 3);
+    ctx.lineTo(0, -size);
+    ctx.fill();
+    ctx.restore();
+}
+
+/**
+ * -----------------------------------------------------------------------
+ * TRUTH-SEEKER ORB SYSTEM
+ * -----------------------------------------------------------------------
+ */
+class OrbSystem {
+    constructor() {
+        this.orbs = [];
+        this.count = 9;
+        this.initOrbs();
+    }
+
+    initOrbs() {
+        for(let i=0; i<this.count; i++) {
+            this.orbs.push({
+                x: 0, y: 0, 
+                targetX: 0, targetY: 0,
+                angle: (i / this.count) * Math.PI * 2,
+                floatOffset: Math.random() * Math.PI * 2
+            });
+        }
+    }
+
+    update(centerX, centerY, scale, isActive) {
+        if (!isActive) return;
+        const anchorX = centerX;
+        const anchorY = centerY + (100 * scale); 
+        const radius = CONFIG.physics.orbDistance * scale;
+
+        this.orbs.forEach((orb, i) => {
+            orb.angle += 0.005; 
+            orb.floatOffset += 0.05;
+            orb.targetX = anchorX + Math.cos(orb.angle) * radius;
+            orb.targetY = anchorY + Math.sin(orb.angle) * radius + Math.sin(orb.floatOffset)*10;
+            orb.x = lerp(orb.x, orb.targetX, CONFIG.physics.orbLag);
+            orb.y = lerp(orb.y, orb.targetY, CONFIG.physics.orbLag);
+        });
+    }
+
+    draw(ctx, scale) {
+        const size = CONFIG.physics.orbRadius * scale;
+        this.orbs.forEach(orb => {
+            const grad = ctx.createRadialGradient(
+                orb.x - size*0.3, orb.y - size*0.3, size * 0.1,
+                orb.x, orb.y, size
+            );
+            grad.addColorStop(0, CONFIG.colors.orbGradient[0]);
+            grad.addColorStop(0.3, CONFIG.colors.orbGradient[1]);
+            grad.addColorStop(1, CONFIG.colors.orbGradient[2]);
+
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(orb.x, orb.y, size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        });
+    }
+}
+
+/**
+ * -----------------------------------------------------------------------
+ * MAIN APPLICATION
+ * -----------------------------------------------------------------------
+ */
+class RikudoApp {
+    constructor() {
+        // Validation Check
+        this.checkSecureContext();
+
+        this.video = document.querySelector('.input_video');
+        this.canvas = document.querySelector('.output_canvas');
+        this.ctx = this.canvas.getContext('2d');
+        
+        // Offscreen canvas for mask tinting
+        this.maskCanvas = document.createElement('canvas');
+        this.maskCtx = this.maskCanvas.getContext('2d');
+        
+        this.orbSystem = new OrbSystem();
+        this.transcendState = 0; // 0: Idle, 1: Charging, 2: Active
+        this.chargeTimer = 0;
+        
+        // Detection Results
+        this.segmentationMask = null;
+        this.hands = null;
+        this.faceMesh = null;
+        this.selfieSegmentation = null;
+        
+        this.init();
+        window.addEventListener('resize', () => this.resize());
+        this.resize();
+    }
+
+    checkSecureContext() {
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+            alert("⚠️ Camera Error: You must use HTTPS or Localhost for AR features to work.");
+            document.getElementById('status-text').innerHTML = "ERROR:<br>Requires HTTPS";
+        }
+    }
+
+    resize() {
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+        this.maskCanvas.width = window.innerWidth;
+        this.maskCanvas.height = window.innerHeight;
+    }
+
+    async init() {
+        try {
+            // 1. Hands (Gesture)
+            this.hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+            this.hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7 });
+            this.hands.onResults(this.onHandResults.bind(this));
+
+            // 2. Face Mesh (Eyes/Markings)
+            this.faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
+            this.faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
+            this.faceMesh.onResults(this.onFaceMeshResults.bind(this));
+
+            // 3. Selfie Segmentation (Cloak)
+            this.selfieSegmentation = new SelfieSegmentation({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`});
+            this.selfieSegmentation.setOptions({ modelSelection: 1 });
+            this.selfieSegmentation.onResults(this.onSegmentationResults.bind(this));
+
+            // 4. Robust Camera Setup
+            const camera = new Camera(this.video, {
+                onFrame: async () => {
+                    await this.processFrame();
+                },
+                width: 1280, // Request ideal resolution, but fallback handled by browser
+                height: 720,
+                facingMode: 'user' // IMPORTANT for mobile
+            });
+
+            await camera.start();
+            
+            // Hide loading spinner once started
+            document.getElementById('status-overlay').style.display = 'none';
+
+        } catch (error) {
+            console.error("Camera Init Error:", error);
+            document.getElementById('status-text').innerHTML = "Error Starting Camera:<br>" + error.message;
+            document.querySelector('.spinner').style.borderTopColor = 'red';
+        }
+    }
+
+    async processFrame() {
+        // Pipeline Logic
+        // If Sage Mode Active: Segmentation -> Face
+        // If Idle: Hands -> Face
+        
+        if (this.transcendState === 2) {
+            await this.selfieSegmentation.send({image: this.video});
+        } else {
+            if(this.hands) await this.hands.send({image: this.video});
+            await this.faceMesh.send({image: this.video});
+        }
+    }
+
+    onHandResults(results) {
+        if (this.transcendState !== 0) return; 
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            const landmarks = results.multiHandLandmarks[0];
+            const indexTip = landmarks[8];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+
+            // 1. Fingers Extended Check
+            const isIndexUp = indexTip.y < landmarks[6].y;
+            const isMiddleUp = middleTip.y < landmarks[10].y;
+            const isRingDown = ringTip.y > landmarks[14].y; 
+            const isPinkyDown = pinkyTip.y > landmarks[18].y; 
+
+            // 2. Fingers Touching Check
+            const distance = Math.hypot(indexTip.x - middleTip.x, indexTip.y - middleTip.y);
+
+            // Trigger Condition
+            if (isIndexUp && isMiddleUp && isRingDown && isPinkyDown && distance < 0.05) {
+                document.getElementById('transcend-btn').style.background = 'rgba(255,215,0,0.5)';
+                this.triggerTransformation();
+            }
+        }
+    }
+
+    onSegmentationResults(results) {
+        this.segmentationMask = results.segmentationMask;
+        // Chain to FaceMesh
+        this.faceMesh.send({image: this.video});
+    }
+
+    onFaceMeshResults(results) {
+        this.ctx.save();
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+
+        // 1. Draw Original Video Feed (Visibility Layer)
+        this.ctx.drawImage(results.image, 0, 0, w, h);
+
+        // 2. Draw Chakra Aura (Overlay Layer)
+        if (this.segmentationMask && this.transcendState === 2) {
+            this.drawChakraAura(w, h);
+        }
+
+        // 3. Face & Orbs Logic
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+            const landmarks = results.multiFaceLandmarks[0];
+            
+            const nose = landmarks[1];
+            const leftCheek = landmarks[234];
+            const rightCheek = landmarks[454];
+            const faceWidth = Math.hypot((rightCheek.x - leftCheek.x)*w, (rightCheek.y - leftCheek.y)*h);
+            const scale = faceWidth / 150;
+            const centerX = nose.x * w;
+            const centerY = nose.y * h;
+
+            // 4. Draw Orbs
+            if (this.transcendState === 2) {
+                this.orbSystem.update(centerX, centerY, scale, true);
+                this.orbSystem.draw(this.ctx, scale);
+                
+                this.drawMagatamaNecklace(landmarks, w, h, scale);
+                this.drawWhiskers(landmarks, w, h);
+            }
+
+            // 5. Draw Eyes
+            if (this.transcendState > 0) {
+                this.ctx.globalAlpha = (this.transcendState === 1) ? this.chargeTimer : 1.0;
+                this.drawSixPathsEyes(landmarks, w, h);
+            }
+        }
+
+        this.ctx.restore();
+    }
+
+    drawChakraAura(w, h) {
+        // Clean mask canvas
+        this.maskCtx.clearRect(0, 0, w, h);
+        
+        // 1. Draw segmentation mask
+        this.maskCtx.drawImage(this.segmentationMask, 0, 0, w, h);
+        
+        // 2. Tint Gold
+        this.maskCtx.globalCompositeOperation = 'source-in';
+        this.maskCtx.fillStyle = CONFIG.colors.gold;
+        this.maskCtx.fillRect(0, 0, w, h);
+        
+        // 3. Apply to Main Canvas (Screen Blend Mode)
+        this.ctx.save();
+        this.ctx.globalCompositeOperation = 'screen';
+        this.ctx.filter = 'blur(20px)'; 
+        this.ctx.globalAlpha = 0.6;
+        this.ctx.drawImage(this.maskCanvas, 0, 0);
+        
+        // Core Glow
+        this.ctx.filter = 'blur(5px)'; 
+        this.ctx.globalAlpha = 0.4;
+        this.ctx.drawImage(this.maskCanvas, 0, 0);
+        
+        this.ctx.restore();
+        this.maskCtx.globalCompositeOperation = 'source-over'; 
+    }
+
+    drawSixPathsEyes(landmarks, w, h) {
+        const drawEye = (centerIdx, radiusIndices) => {
+            const center = landmarks[centerIdx];
+            const edge = landmarks[radiusIndices[0]];
+            const r = Math.hypot((center.x - edge.x)*w, (center.y - edge.y)*h) * 1.1;
+            const cx = center.x * w;
+            const cy = center.y * h;
+
+            this.ctx.save();
+            this.ctx.translate(cx, cy);
+
+            this.ctx.beginPath();
+            this.ctx.arc(0, 0, r, 0, Math.PI * 2);
+            this.ctx.fillStyle = CONFIG.colors.gold;
+            this.ctx.fill();
+
+            this.ctx.fillStyle = '#000';
+            this.ctx.fillRect(-r, -r*0.2, r*2, r*0.4); 
+            this.ctx.beginPath();
+            this.ctx.ellipse(0, 0, r*0.3, r, 0, 0, Math.PI*2); 
+            this.ctx.fill();
+
+            this.ctx.restore();
+        };
+
+        drawEye(468, [469, 470, 471, 472]);
+        drawEye(473, [474, 475, 476, 477]);
+    }
+
+    drawWhiskers(landmarks, w, h) {
+        this.ctx.lineWidth = 4 * (w/1280);
+        this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+        this.ctx.lineCap = 'round';
+
+        const drawCurve = (indices) => {
+            this.ctx.beginPath();
+            const start = landmarks[indices[0]];
+            this.ctx.moveTo(start.x * w, start.y * h);
+            for(let i=1; i<indices.length; i++) {
+                this.ctx.lineTo(landmarks[indices[i]].x * w, landmarks[indices[i]].y * h);
+            }
+            this.ctx.stroke();
+        };
+
+        drawCurve([123, 116, 111]); 
+        drawCurve([205, 206, 203]); 
+        drawCurve([212, 214, 210]); 
+        drawCurve([352, 345, 340]); 
+        drawCurve([425, 426, 423]); 
+        drawCurve([432, 434, 430]); 
+    }
+
+    drawMagatamaNecklace(landmarks, w, h, scale) {
+        const chin = landmarks[152];
+        const leftShoulder = landmarks[132];
+        const rightShoulder = landmarks[361];
+
+        const chestY = chin.y * h + (120 * scale);
+        const width = (rightShoulder.x - leftShoulder.x) * w;
+        const startX = leftShoulder.x * w;
+        
+        for(let i=0; i<6; i++) {
+            const t = i / 5;
+            const x = startX + (width * t);
+            const yOffset = Math.sin(t * Math.PI) * 40 * scale; 
+            drawMagatama(this.ctx, x, chestY + yOffset, 8 * scale, Math.PI);
+        }
+    }
+
+    triggerTransformation() {
+        if(this.transcendState === 0) {
+            this.transcendState = 1;
+            
+            if(this.hands) {
+                this.hands.close();
+                this.hands = null;
+            }
+
+            document.getElementById('transcend-btn').innerText = "GATHERING CHAKRA...";
+            document.getElementById('transcend-btn').disabled = true;
+            document.getElementById('gesture-hint').style.display = 'none';
+            
+            let start = Date.now();
+            const loop = () => {
+                let elapsed = (Date.now() - start) / 1000;
+                if (elapsed < 2) {
+                    this.chargeTimer = elapsed / 2;
+                    requestAnimationFrame(loop);
+                } else {
+                    this.transcendState = 2;
+                    this.triggerFlash();
+                    document.getElementById('transcend-btn').style.display = 'none';
+                    document.querySelector('.sub-text').innerText = "DIVINE POWER ACTIVE";
+                }
+            };
+            loop();
+        }
+    }
+
+    triggerFlash() {
+        const flash = document.getElementById('flash-overlay');
+        flash.style.opacity = 1;
+        setTimeout(() => flash.style.opacity = 0, 300);
+    }
+}
+
+// Start App
+const app = new RikudoApp();
+
+</script>
+</body>
+</html>

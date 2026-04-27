@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sudarshan AR - Real Divine Weapon</title>
+    
+    <!-- MediaPipe Hands CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #050510; /* Darker cosmic background */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .input_video {
+            display: none;
+        }
+        .output_canvas {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+            transform: scaleX(-1); /* Mirror effect */
+        }
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #FFD700;
+            text-shadow: 0 0 15px #8A2BE2;
+            z-index: 10;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 1.5rem;
+            text-shadow: 0 0 20px #FFD700;
+            z-index: 20;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <h2>Divine Sudarshan AR</h2>
+        <p>Raise your index finger and fold the others to summon the Chakra.</p>
+    </div>
+    <div id="loading">Initializing Divine Engine...</div>
+
+    <video class="input_video"></video>
+    <canvas class="output_canvas"></canvas>
+
+<script>
+    const videoElement = document.querySelector('.input_video');
+    const canvasElement = document.querySelector('.output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+
+    // --- State & Physics Variables ---
+    let isChakraActive = false;
+    let wasChakraActive = false;
+    
+    // Positioning (Tip of Index Finger)
+    let currentTipX = 0, currentTipY = 0;
+    let targetTipX = 0, targetTipY = 0;
+    
+    // Orientation (Base of Index Finger for Angle Calculation)
+    let currentMcpX = 0, currentMcpY = 0;
+    let targetMcpX = 0, targetMcpY = 0;
+    
+    // Scale Physics
+    let currentScale = 0;
+    let targetScale = 0;
+    let scaleVelocity = 0;
+    const tension = 0.12;
+    const friction = 0.8;
+    
+    let baseRadius = 160; // Increased base size for detailed weapon
+    let rotationAngle = 0;
+    let particles =[];
+    
+    let latestImage = null;
+    let latestLandmarks = null;
+
+    function resizeCanvas() {
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // --- Euclidean Math & Gesture Logic ---
+    function getDistance(p1, p2) {
+        const dx = (p1.x - p2.x) * canvasElement.width;
+        const dy = (p1.y - p2.y) * canvasElement.height;
+        return Math.hypot(dx, dy);
+    }
+
+    function checkSudarshanGesture(landmarks) {
+        const wrist = landmarks[0];
+        const indexDist = getDistance(landmarks[8], wrist);
+        const indexMCPDist = getDistance(landmarks[5], wrist);
+        const middleDist = getDistance(landmarks[12], wrist);
+        const middleMCPDist = getDistance(landmarks[9], wrist);
+        const ringDist = getDistance(landmarks[16], wrist);
+        const ringMCPDist = getDistance(landmarks[13], wrist);
+        const pinkyDist = getDistance(landmarks[20], wrist);
+        const pinkyMCPDist = getDistance(landmarks[17], wrist);
+
+        const indexExtended = indexDist > indexMCPDist;
+        const middleFolded = middleDist < middleMCPDist;
+        const ringFolded = ringDist < ringMCPDist;
+        const pinkyFolded = pinkyDist < pinkyMCPDist;
+
+        return indexExtended && middleFolded && ringFolded && pinkyFolded;
+    }
+
+    // --- Advanced Geometry Rendering (The Realistic Divine Weapon) ---
+    function drawDetailedChakra(ctx, radius) {
+        // 1. Sharp Outer Saw-Teeth (The deadly edge)
+        ctx.beginPath();
+        const numTeeth = 108; // Divine number of serrations
+        for(let i=0; i<numTeeth; i++) {
+            const angle = (i * Math.PI * 2) / numTeeth;
+            const nextAngle = ((i+1) * Math.PI * 2) / numTeeth;
+            const midAngle = angle + (nextAngle - angle) * 0.7; // Asymmetric slant for sharp saw look
+
+            const innerRoot = radius * 0.80; 
+            const outerTip = radius; 
+            
+            if (i === 0) ctx.moveTo(Math.cos(angle) * innerRoot, Math.sin(angle) * innerRoot);
+            
+            // Slant up to sharp tip
+            ctx.lineTo(Math.cos(midAngle) * outerTip, Math.sin(midAngle) * outerTip);
+            // Drop straight down to root
+            ctx.lineTo(Math.cos(nextAngle) * innerRoot, Math.sin(nextAngle) * innerRoot);
+        }
+        // Gold Metallic Gradient for edges
+        const edgeGrad = ctx.createLinearGradient(-radius, -radius, radius, radius);
+        edgeGrad.addColorStop(0, '#FFE066'); // Bright gold
+        edgeGrad.addColorStop(0.5, '#B8860B'); // Dark goldenrod
+        edgeGrad.addColorStop(1, '#FFD700'); 
+        
+        ctx.fillStyle = edgeGrad;
+        ctx.fill();
+        ctx.strokeStyle = '#FFFFFF'; // Bright highlight on blade edge
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+
+        // 2. Main Outer Plate
+        ctx.beginPath();
+        ctx.arc(0, 0, radius * 0.82, 0, Math.PI * 2);
+        ctx.fillStyle = '#8B6508'; // Base bronze/gold
+        ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#FFD700';
+        ctx.stroke();
+
+        // 3. Intricate 'X' Mandala Ring (From reference image)
+        const innerR = radius * 0.60;
+        const outerR = radius * 0.78;
+        
+        ctx.beginPath();
+        ctx.arc(0, 0, innerR, 0, Math.PI * 2);
+        ctx.fillStyle = '#DAA520';
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.strokeStyle = '#3E2723'; // Dark indentations
+        ctx.lineWidth = 2;
+        const numXs = 36;
+        for(let i=0; i<numXs; i++) {
+            const a1 = (i * Math.PI * 2) / numXs;
+            const a2 = ((i+0.5) * Math.PI * 2) / numXs;
+            
+            // Draw cross-hatch pattern
+            ctx.beginPath();
+            ctx.moveTo(Math.cos(a1)*innerR, Math.sin(a1)*innerR);
+            ctx.lineTo(Math.cos(a2)*outerR, Math.sin(a2)*outerR);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(Math.cos(a2)*innerR, Math.sin(a2)*innerR);
+            ctx.lineTo(Math.cos(a1)*outerR, Math.sin(a1)*outerR);
+            ctx.stroke();
+        }
+
+        // 4. Inner Golden Hub
+        ctx.beginPath();
+        ctx.arc(0, 0, radius * 0.45, 0, Math.PI * 2);
+        const hubGrad = ctx.createRadialGradient(0, 0, radius * 0.1, 0, 0, radius * 0.45);
+        hubGrad.addColorStop(0, '#FFD700');
+        hubGrad.addColorStop(1, '#B8860B');
+        ctx.fillStyle = hubGrad;
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.stroke();
+
+        // Engraved dots inside hub
+        ctx.fillStyle = '#3E2723';
+        for(let i=0; i<16; i++) {
+            const angle = (i * Math.PI * 2) / 16;
+            ctx.beginPath();
+            ctx.arc(Math.cos(angle) * radius * 0.35, Math.sin(angle) * radius * 0.35, radius * 0.03, 0, Math.PI*2);
+            ctx.fill();
+        }
+
+        // 5. Central 3D Glowing Dome (Red/Gold Jewel)
+        // Since the canvas is squashed to an ellipse, this pure circle becomes a perfect 3D dome!
+        ctx.beginPath();
+        ctx.arc(0, 0, radius * 0.18, 0, Math.PI * 2);
+        
+        const domeGrad = ctx.createRadialGradient(
+            radius * -0.05, radius * -0.05, radius * 0.01, // Offset highlight for 3D sphere look
+            0, 0, radius * 0.18
+        );
+        domeGrad.addColorStop(0, '#FFFFFF'); // Hot white highlight
+        domeGrad.addColorStop(0.2, '#FF4500'); // Radiant orange-red
+        domeGrad.addColorStop(0.8, '#8B0000'); // Deep ruby
+        domeGrad.addColorStop(1, '#3E0000'); // Shadowed edge
+        
+        ctx.fillStyle = domeGrad;
+        ctx.fill();
+        
+        // Final rim highlight around the dome
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(255, 215, 0, 0.8)';
+        ctx.stroke();
+    }
+
+    // --- MediaPipe Callback ---
+    function onResults(results) {
+        document.getElementById('loading').style.display = 'none';
+        latestImage = results.image;
+        
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            latestLandmarks = results.multiHandLandmarks[0];
+            const isGestureValid = checkSudarshanGesture(latestLandmarks);
+
+            if (isGestureValid) {
+                isChakraActive = true;
+                targetScale = 1.0;
+                
+                // Track Tip (Landmark 8) for Position
+                targetTipX = latestLandmarks[8].x * canvasElement.width;
+                targetTipY = latestLandmarks[8].y * canvasElement.height;
+
+                // Track Base/MCP (Landmark 5) for Orientation Angle
+                targetMcpX = latestLandmarks[5].x * canvasElement.width;
+                targetMcpY = latestLandmarks[5].y * canvasElement.height;
+
+                // Dynamic Scaling based on Depth
+                const handSize = getDistance(latestLandmarks[0], latestLandmarks[9]);
+                baseRadius = handSize * 1.4; // Scaled up to see the intricate details
+
+                if (!wasChakraActive) {
+                    currentTipX = targetTipX; currentTipY = targetTipY;
+                    currentMcpX = targetMcpX; currentMcpY = targetMcpY;
+                }
+            } else {
+                isChakraActive = false;
+                targetScale = 0;
+            }
+        } else {
+            isChakraActive = false;
+            targetScale = 0;
+        }
+
+        wasChakraActive = isChakraActive;
+    }
+
+    // --- Render Loop (60 FPS) ---
+    function render() {
+        if (latestImage) {
+            canvasCtx.drawImage(latestImage, 0, 0, canvasElement.width, canvasElement.height);
+        }
+
+        // 1. Smooth Damping for Tracking Points
+        currentTipX += (targetTipX - currentTipX) * 0.4;
+        currentTipY += (targetTipY - currentTipY) * 0.4;
+        currentMcpX += (targetMcpX - currentMcpX) * 0.4;
+        currentMcpY += (targetMcpY - currentMcpY) * 0.4;
+
+        // 2. Spring Physics for Materialization
+        scaleVelocity += (targetScale - currentScale) * tension;
+        scaleVelocity *= friction;
+        currentScale += scaleVelocity;
+        if (currentScale < 0) currentScale = 0;
+
+        // Rotation speed (blistering fast)
+        rotationAngle += 0.4; 
+
+        if (currentScale > 0.01) {
+            canvasCtx.save();
+            
+            // Move origin to the tip of the index finger
+            canvasCtx.translate(currentTipX, currentTipY);
+            
+            // --- The Core Magic: 3D Perspective Transformation ---
+            
+            // Calculate vector from base of finger to tip
+            const dx = currentTipX - currentMcpX;
+            const dy = currentTipY - currentMcpY;
+            const fingerAngle = Math.atan2(dy, dx);
+            
+            // Step A: Rotate coordinate system to align with the finger.
+            // Adding PI/2 ensures the Y-axis points perfectly ALONG the finger.
+            canvasCtx.rotate(fingerAngle + Math.PI / 2);
+            
+            // Step B: Scale overall size (Bounce effect)
+            canvasCtx.scale(currentScale, currentScale);
+
+            // Step C: Draw the Cosmic Purple Aura (Slightly squashed)
+            canvasCtx.save();
+            canvasCtx.scale(1, 0.4); 
+            canvasCtx.beginPath();
+            canvasCtx.arc(0, 0, baseRadius * 1.8, 0, Math.PI * 2);
+            
+            const auraGrad = canvasCtx.createRadialGradient(0, 0, baseRadius * 0.4, 0, 0, baseRadius * 1.8);
+            auraGrad.addColorStop(0, 'rgba(138, 43, 226, 0.9)'); // Bright Purple center
+            auraGrad.addColorStop(0.5, 'rgba(75, 0, 130, 0.5)');  // Indigo mid
+            auraGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');         // Fade to clear
+            
+            canvasCtx.fillStyle = auraGrad;
+            canvasCtx.globalCompositeOperation = 'screen';
+            canvasCtx.fill();
+            canvasCtx.restore();
+
+            // Step D: Apply Heavy Y-Axis Compression for 3D Perspective!
+            // This squashes the drawing, making the Chakra sit perfectly horizontal to the finger
+            canvasCtx.scale(1, 0.22); 
+            
+            // Add Divine Glow
+            canvasCtx.shadowColor = '#FFD700';
+            canvasCtx.shadowBlur = 20;
+
+            // Step E: Spin the Chakra IN the 3D perspective plane
+            canvasCtx.rotate(rotationAngle);
+            
+            // Render the highly detailed weapon
+            drawDetailedChakra(canvasCtx, baseRadius);
+
+            canvasCtx.restore();
+        }
+
+        requestAnimationFrame(render);
+    }
+
+    // --- Initialize System ---
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6
+    });
+
+    hands.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 1280,
+        height: 720
+    });
+
+    camera.start();
+    requestAnimationFrame(render);
+
+</script>
+</body>
+</html>

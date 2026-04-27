@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lightning Style: Chidori AR</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; }
+        canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; transform: scaleX(-1); }
+        video { display: none; }
+
+        #ui-layer {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            z-index: 10;
+        }
+
+        #header {
+            margin-top: 20px;
+            text-align: center;
+            color: #00e5ff;
+            text-shadow: 0 0 20px #fff, 2px 2px #000;
+            font-size: 24px;
+            font-weight: bold;
+            letter-spacing: 4px;
+        }
+
+        #btn-start {
+            pointer-events: auto;
+            margin-bottom: 100px;
+            padding: 20px 50px;
+            background: linear-gradient(45deg, #0072ff, #00e5ff);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 0 30px rgba(0, 229, 255, 0.6);
+            transition: 0.3s;
+            border: 2px solid #fff;
+        }
+
+        #btn-start:hover { transform: scale(1.1); box-shadow: 0 0 50px #00e5ff; }
+
+        .charge-bars {
+            display: flex;
+            width: 80%;
+            justify-content: space-around;
+            margin-bottom: 20px;
+        }
+
+        .bar-container { width: 300px; height: 10px; background: rgba(0,0,0,0.5); border: 1px solid #0ff; }
+        .bar-fill { width: 0%; height: 100%; background: #fff; box-shadow: 0 0 15px #0ff; transition: width 0.1s; }
+    </style>
+</head>
+<body>
+
+    <video id="input_video"></video>
+    <canvas id="output_canvas"></canvas>
+
+    <div id="ui-layer">
+        <div id="header">LIGHTNING STYLE: CHIDORI</div>
+        <button id="btn-start">ACTIVATE CHIDORI</button>
+        <div class="charge-bars">
+            <div><div class="bar-container"><div id="fill-0" class="bar-fill"></div></div></div>
+            <div><div class="bar-container"><div id="fill-1" class="bar-fill"></div></div></div>
+        </div>
+    </div>
+
+<script>
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const startBtn = document.getElementById('btn-start');
+
+    let handStates = [
+        { charge: 0, active: false, x: 0, y: 0, size: 0 },
+        { charge: 0, active: false, x: 0, y: 0, size: 0 }
+    ];
+
+    const MAX_CHARGE = 60; // 2 seconds at 30fps
+    const GROWTH_START = 10;
+    let screenShake = 0;
+
+    function onResults(results) {
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+
+        canvasCtx.save();
+        
+        if (screenShake > 0) {
+            canvasCtx.translate(Math.random() * screenShake - screenShake/2, Math.random() * screenShake - screenShake/2);
+            screenShake *= 0.9;
+        }
+
+        canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+        handStates.forEach(h => h.active = false);
+
+        if (results.multiHandLandmarks) {
+            for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                const landmarks = results.multiHandLandmarks[i];
+                const handedness = results.multiHandedness[i].label === 'Left' ? 0 : 1;
+                const state = handStates[handedness];
+
+                state.x = landmarks[9].x * canvasElement.width;
+                state.y = landmarks[9].y * canvasElement.height;
+                
+                const dx = (landmarks[0].x - landmarks[9].x) * canvasElement.width;
+                const dy = (landmarks[0].y - landmarks[9].y) * canvasElement.height;
+                const baseSize = Math.sqrt(dx*dx + dy*dy) * 1.2;
+
+                state.active = true;
+                state.charge = Math.min(MAX_CHARGE, state.charge + 1);
+                
+                let multiplier = 1.0;
+                if (state.charge > GROWTH_START) {
+                    const progress = (state.charge - GROWTH_START) / (MAX_CHARGE - GROWTH_START);
+                    multiplier = 1.0 + progress * 0.5;
+                    screenShake = progress * 10; 
+                }
+                state.size = baseSize * multiplier;
+
+                document.getElementById(`fill-${handedness}`).style.width = (state.charge / MAX_CHARGE * 100) + '%';
+                
+                drawChidori(state);
+                // ... inside the hand landmarks loop ...
+drawChidori(state);
+
+// NEW: Pass the landmarks and the current charge progress (0.0 to 1.0)
+const progress = state.charge / MAX_CHARGE;
+drawArmElectricity(canvasCtx, landmarks, progress);
+            }
+        }
+
+        handStates.forEach((h, index) => {
+            if (!h.active) {
+                h.charge = Math.max(0, h.charge - 2);
+                document.getElementById(`fill-${index}`).style.width = (h.charge / MAX_CHARGE * 100) + '%';
+            }
+        });
+
+        canvasCtx.restore();
+    }
+
+    function drawChidori(state) {
+        const { x, y, size, charge } = state;
+        const isFullPower = charge >= MAX_CHARGE;
+        const time = Date.now() * 0.005;
+
+        // --- LAYER 1: ELECTRIC CORE (Flickering Ball) ---
+        const flicker = Math.random() * 0.5 + 0.5;
+        const coreGrad = canvasCtx.createRadialGradient(x, y, 0, x, y, size * 0.8);
+        coreGrad.addColorStop(0, `rgba(255, 255, 255, ${flicker})`);
+        coreGrad.addColorStop(0.4, `rgba(135, 206, 250, ${flicker * 0.8})`);
+        coreGrad.addColorStop(1, 'transparent');
+
+        canvasCtx.fillStyle = coreGrad;
+        canvasCtx.beginPath();
+        canvasCtx.arc(x, y, size * 0.8, 0, Math.PI * 2);
+        canvasCtx.fill();
+
+        // --- LAYER 2: JAGGED BOLTS (The "Chirping" Lightning) ---
+        const numBolts = isFullPower ? 12 : 4;
+        canvasCtx.shadowBlur = 15;
+        canvasCtx.shadowColor = '#00e5ff';
+
+        for (let b = 0; b < numBolts; b++) {
+            drawLightningBolt(x, y, size * (isFullPower ? 2.5 : 1.2));
+        }
+
+        // --- LAYER 3: HIGH-FREQUENCY SPARKS ---
+        if (isFullPower) {
+            for (let i = 0; i < 10; i++) {
+                const ang = Math.random() * Math.PI * 2;
+                const dist = size * (0.5 + Math.random() * 2);
+                canvasCtx.fillStyle = "#fff";
+                canvasCtx.beginPath();
+                canvasCtx.arc(x + Math.cos(ang) * dist, y + Math.sin(ang) * dist, Math.random() * 3, 0, Math.PI * 2);
+                canvasCtx.fill();
+            }
+        }
+        canvasCtx.shadowBlur = 0;
+    }
+
+    function drawLightningBolt(startX, startY, length) {
+        canvasCtx.beginPath();
+        canvasCtx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+        canvasCtx.lineWidth = 1 + Math.random() * 2;
+        
+        let curX = startX;
+        let curY = startY;
+        const angle = Math.random() * Math.PI * 2;
+        
+        canvasCtx.moveTo(startX, startY);
+        
+        const segments = 6;
+        const segLen = length / segments;
+
+        for (let i = 0; i < segments; i++) {
+            curX += Math.cos(angle) * segLen + (Math.random() - 0.5) * 40;
+            curY += Math.sin(angle) * segLen + (Math.random() - 0.5) * 40;
+            canvasCtx.lineTo(curX, curY);
+        }
+        canvasCtx.stroke();
+    }
+
+    const hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6
+    });
+
+    hands.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+        onFrame: async () => { await hands.send({image: videoElement}); },
+        width: 1280, height: 720
+    });
+
+    startBtn.addEventListener('click', () => {
+        startBtn.style.display = 'none';
+        camera.start();
+    });
+
+    function drawArmElectricity(ctx, landmarks, chargeProgress) {
+    const wrist = landmarks[0];
+    const palm = landmarks[9];
+
+    // Calculate the vector from palm to wrist to find the "forearm" direction
+    const dirX = (wrist.x - palm.x);
+    const dirY = (wrist.y - palm.y);
+
+    const numBolts = Math.floor(chargeProgress * 5); // More bolts as it charges
+    
+    ctx.save();
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = '#00e5ff';
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+    ctx.lineWidth = 1.5;
+
+    for (let i = 0; i < numBolts; i++) {
+        ctx.beginPath();
+        let curX = wrist.x * canvasElement.width;
+        let curY = wrist.y * canvasElement.height;
+        ctx.moveTo(curX, curY);
+
+        // Draw 4-5 jagged segments "up" the arm
+        for (let j = 0; j < 5; j++) {
+            // Move further along the arm vector with random jitter
+            curX += (dirX * canvasElement.width * 0.4) + (Math.random() - 0.5) * 50;
+            curY += (dirY * canvasElement.height * 0.4) + (Math.random() - 0.5) * 50;
+            ctx.lineTo(curX, curY);
+        }
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+</script>
+</body>
+</html>

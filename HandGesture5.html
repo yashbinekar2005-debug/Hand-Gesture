@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Divine Particles | Krishna & Hand Tracking</title>
+    
+    <!-- Dependencies -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        :root {
+            --primary: #FFD700; /* Gold */
+            --secondary: #00f2ff; /* Blue */
+            --bg: #050505;
+            --panel: rgba(20, 20, 20, 0.6);
+            --text: #e0e0e0;
+        }
+
+        * { box-sizing: border-box; user-select: none; }
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
+        #input-video { display: none; } 
+
+        /* UI Overlay */
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 10; pointer-events: none; padding: 20px;
+            display: flex; flex-direction: column; justify-content: space-between;
+        }
+
+        .header {
+            display: flex; justify-content: space-between; align-items: center; pointer-events: auto;
+        }
+
+        h1 {
+            font-size: 1.2rem; margin: 0; text-transform: uppercase; letter-spacing: 2px;
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+
+        .status-badge {
+            font-size: 0.8rem; padding: 5px 15px; border-radius: 20px;
+            background: rgba(255,0,0,0.2); color: #ff5555; border: 1px solid rgba(255,0,0,0.3);
+            transition: 0.3s;
+        }
+        .status-badge.active {
+            background: rgba(0, 255, 136, 0.2); color: #00ff88; border-color: #00ff88;
+        }
+        .status-badge.divine {
+            background: rgba(255, 215, 0, 0.2); color: #FFD700; border-color: #FFD700;
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.5);
+        }
+
+        .controls {
+            pointer-events: auto; background: var(--panel); backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 15px;
+            width: 280px; display: flex; flex-direction: column; gap: 10px;
+        }
+
+        .btn-row { display: flex; gap: 5px; flex-wrap: wrap; }
+        .shape-btn {
+            background: rgba(255,255,255,0.1); border: none; color: white;
+            padding: 8px 12px; border-radius: 6px; cursor: pointer; flex: 1;
+            transition: 0.2s;
+        }
+        .shape-btn:hover, .shape-btn.active { background: var(--secondary); color: black; }
+
+        #intro-overlay {
+            position: absolute; inset: 0; z-index: 20; background: rgba(0,0,0,0.9);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            text-align: center;
+        }
+        .btn-start {
+            margin-top: 20px; padding: 12px 30px; background: var(--secondary);
+            border: none; border-radius: 30px; font-weight: bold; cursor: pointer; font-size: 1rem;
+        }
+
+        /* Namaste Animation Text */
+        #namaste-text {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 3rem; color: #FFD700; font-family: serif; opacity: 0;
+            text-shadow: 0 0 20px #FFD700; transition: opacity 1s; pointer-events: none;
+        }
+        #namaste-text.visible { opacity: 1; }
+    </style>
+</head>
+<body>
+
+    <video id="input-video"></video>
+    <div id="canvas-container"></div>
+
+    <div id="namaste-text">Jai Shri Krishna</div>
+
+    <div id="ui-layer">
+        <div class="header">
+            <h1>Particle Divinity</h1>
+            <div id="cam-status" class="status-badge">CAMERA: OFF</div>
+        </div>
+
+        <div class="controls">
+            <label style="font-size:0.8rem; color:#aaa;">Modes</label>
+            <div class="btn-row">
+                <button class="shape-btn active" data-shape="sphere">Sphere</button>
+                <button class="shape-btn" data-shape="galaxy">Galaxy</button>
+                <button class="shape-btn" data-shape="krishna" style="color:#FFD700">Show Krishna</button>
+            </div>
+            <p style="font-size: 0.75rem; color: #888; margin-top:5px;">
+                🙏 <b>Tip:</b> Join hands (Namaste) to summon the divine form.
+            </p>
+        </div>
+    </div>
+
+    <div id="intro-overlay">
+        <h2>Hand Gesture Experience</h2>
+        <p>Allow camera access to interact.</p>
+        <p>✋ Move hand to control particles.<br>🙏 Do "Namaste" for a surprise.</p>
+        <button id="start-btn" class="btn-start">Start Experience</button>
+    </div>
+
+    <script>
+        /**
+         * CONFIGURATION
+         */
+        const CONFIG = {
+            particleCount: 12000,
+            color: new THREE.Color(0x00f2ff), // Cyan default
+            goldColor: new THREE.Color(0xFFD700), // Gold for Krishna
+            size: 1.2,
+            shape: 'sphere',
+            handPos: new THREE.Vector3(0,0,0),
+            isNamaste: false
+        };
+
+        // Cache for Krishna points to avoid recalculating
+        let krishnaPointsCache = [];
+
+        /**
+         * 1. SETUP THREE.JS
+         */
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x000000, 0.02);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 40;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+
+        /**
+         * 2. GENERATE PARTICLES
+         */
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(CONFIG.particleCount * 3);
+        const targets = new Float32Array(CONFIG.particleCount * 3);
+        const velocities = new Float32Array(CONFIG.particleCount * 3);
+        const colors = new Float32Array(CONFIG.particleCount * 3);
+
+        for (let i = 0; i < CONFIG.particleCount; i++) {
+            const i3 = i * 3;
+            positions[i3] = (Math.random() - 0.5) * 100;
+            positions[i3+1] = (Math.random() - 0.5) * 100;
+            positions[i3+2] = (Math.random() - 0.5) * 100;
+            
+            colors[i3] = CONFIG.color.r;
+            colors[i3+1] = CONFIG.color.g;
+            colors[i3+2] = CONFIG.color.b;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        // Shader Material
+        const material = new THREE.ShaderMaterial({
+            uniforms: {
+                uTime: { value: 0 },
+                uSize: { value: 20.0 }
+            },
+            vertexShader: `
+                uniform float uTime;
+                uniform float uSize;
+                attribute vec3 color;
+                varying vec3 vColor;
+                void main() {
+                    vColor = color;
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    gl_PointSize = uSize * (20.0 / -mvPosition.z);
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                varying vec3 vColor;
+                void main() {
+                    float d = distance(gl_PointCoord, vec2(0.5));
+                    if(d > 0.5) discard;
+                    float alpha = 1.0 - smoothstep(0.3, 0.5, d);
+                    gl_FragColor = vec4(vColor, alpha);
+                }
+            `,
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+        });
+
+        const particleSystem = new THREE.Points(geometry, material);
+        scene.add(particleSystem);
+
+        /**
+         * 3. SHAPE LOGIC (Include Procedural Krishna)
+         */
+        
+        // Helper: Generate points from text/canvas for Krishna
+        function generateKrishnaPoints() {
+            if (krishnaPointsCache.length > 0) return krishnaPointsCache;
+
+            const c = document.createElement('canvas');
+            const size = 200;
+            c.width = size;
+            c.height = size;
+            const ctx = c.getContext('2d');
+            
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0,0,size,size);
+            
+            // DRAW KRISHNA SILHOUETTE (Face Profile + Flute + Peacock Feather)
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 3;
+
+            // 1. Face Profile
+            ctx.beginPath();
+            ctx.moveTo(90, 160); // Neck
+            ctx.quadraticCurveTo(110, 150, 110, 130); // Chin
+            ctx.lineTo(110, 100); // Face front
+            ctx.quadraticCurveTo(110, 70, 80, 60); // Forehead
+            ctx.lineTo(70, 60);
+            ctx.stroke();
+            ctx.fill();
+
+            // 2. Turban / Hair
+            ctx.beginPath();
+            ctx.arc(80, 65, 25, Math.PI, 0); 
+            ctx.fill();
+
+            // 3. Peacock Feather (Oval on top)
+            ctx.beginPath();
+            ctx.ellipse(80, 30, 10, 20, -0.3, 0, Math.PI * 2);
+            ctx.stroke();
+            // Eye of feather
+            ctx.beginPath();
+            ctx.arc(83, 25, 4, 0, Math.PI*2); 
+            ctx.fill();
+
+            // 4. Flute (Rectangular line across)
+            ctx.lineWidth = 6;
+            ctx.beginPath();
+            ctx.moveTo(60, 135);
+            ctx.lineTo(140, 120);
+            ctx.stroke();
+
+            // Hands holding flute
+            ctx.beginPath();
+            ctx.arc(90, 130, 8, 0, Math.PI*2);
+            ctx.arc(115, 125, 8, 0, Math.PI*2);
+            ctx.fill();
+
+            // Convert pixels to 3D points
+            const points = [];
+            const imgData = ctx.getImageData(0,0,size,size);
+            for(let y=0; y<size; y+=2) { // Step 2 for density
+                for(let x=0; x<size; x+=2) {
+                    const i = (y*size + x) * 4;
+                    if(imgData.data[i] > 50) { // If pixel is bright
+                        points.push({
+                            x: (x - size/2) * 0.25, // Scale and center
+                            y: -(y - size/2) * 0.25, // Invert Y
+                            z: 0
+                        });
+                    }
+                }
+            }
+            krishnaPointsCache = points;
+            return points;
+        }
+
+        function updateTargets(shapeName) {
+            const count = CONFIG.particleCount;
+            const points = shapeName === 'krishna' ? generateKrishnaPoints() : null;
+
+            for(let i=0; i<count; i++) {
+                const i3 = i*3;
+                let x,y,z;
+
+                if (shapeName === 'sphere') {
+                    const phi = Math.acos(-1 + (2 * i) / count);
+                    const theta = Math.sqrt(count * Math.PI) * phi;
+                    const r = 15;
+                    x = r * Math.cos(theta) * Math.sin(phi);
+                    y = r * Math.sin(theta) * Math.sin(phi);
+                    z = r * Math.cos(phi);
+                } 
+                else if (shapeName === 'galaxy') {
+                    const angle = i * 0.1;
+                    const r = 2 + (i/count) * 20;
+                    x = Math.cos(angle) * r;
+                    y = (Math.random()-0.5) * 2;
+                    z = Math.sin(angle) * r;
+                }
+                else if (shapeName === 'krishna' && points.length > 0) {
+                    // Map particles to image points
+                    const p = points[i % points.length];
+                    // Add some random fuzziness so it's not too flat
+                    x = p.x * 1.5; 
+                    y = p.y * 1.5; 
+                    z = p.z + (Math.random() - 0.5) * 2;
+                }
+
+                targets[i3] = x;
+                targets[i3+1] = y;
+                targets[i3+2] = z;
+            }
+        }
+
+        updateTargets('sphere'); // Initial
+
+        /**
+         * 4. ANIMATION LOOP
+         */
+        function animate() {
+            requestAnimationFrame(animate);
+
+            material.uniforms.uTime.value = performance.now() / 1000;
+            
+            const positionsArr = geometry.attributes.position.array;
+            const colorsArr = geometry.attributes.color.array;
+
+            // Determine target color based on state
+            const targetColor = CONFIG.isNamaste ? CONFIG.goldColor : CONFIG.color;
+
+            for(let i=0; i<CONFIG.particleCount; i++) {
+                const i3 = i * 3;
+
+                // 1. Get Base Target Position
+                let tx = targets[i3];
+                let ty = targets[i3+1];
+                let tz = targets[i3+2];
+
+                // 2. Hand Following Logic
+                // If not Namaste, particles gently drift towards hand position
+                if (!CONFIG.isNamaste) {
+                    tx += CONFIG.handPos.x;
+                    ty += CONFIG.handPos.y;
+                    // Slightly rotate towards hand
+                }
+
+                // 3. Physics (Lerp)
+                // If Namaste, move faster to form the shape
+                const speed = CONFIG.isNamaste ? 0.08 : 0.03;
+
+                positionsArr[i3] += (tx - positionsArr[i3]) * speed;
+                positionsArr[i3+1] += (ty - positionsArr[i3+1]) * speed;
+                positionsArr[i3+2] += (tz - positionsArr[i3+2]) * speed;
+
+                // 4. Color Transition
+                colorsArr[i3] += (targetColor.r - colorsArr[i3]) * 0.05;
+                colorsArr[i3+1] += (targetColor.g - colorsArr[i3+1]) * 0.05;
+                colorsArr[i3+2] += (targetColor.b - colorsArr[i3+2]) * 0.05;
+            }
+
+            geometry.attributes.position.needsUpdate = true;
+            geometry.attributes.color.needsUpdate = true;
+
+            // Gentle global rotation
+            if(CONFIG.isNamaste) {
+                // Stabilize rotation to show face clearly
+                particleSystem.rotation.y += (0 - particleSystem.rotation.y) * 0.05;
+                particleSystem.rotation.x += (0 - particleSystem.rotation.x) * 0.05;
+            } else {
+                particleSystem.rotation.y += 0.002;
+            }
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        /**
+         * 5. HAND TRACKING & NAMASTE DETECTION
+         */
+        const videoElement = document.getElementById('input-video');
+        
+        function onResults(results) {
+            const hands = results.multiHandLandmarks;
+            const statusEl = document.getElementById('cam-status');
+            const namasteText = document.getElementById('namaste-text');
+
+            if (hands && hands.length > 0) {
+                statusEl.innerText = "HANDS DETECTED";
+                statusEl.classList.add('active');
+
+                // 1. Track Center of Hands
+                let cx = 0, cy = 0;
+                hands.forEach(hand => {
+                    cx += hand[9].x; // Middle finger base
+                    cy += hand[9].y;
+                });
+                cx /= hands.length;
+                cy /= hands.length;
+
+                // Map to 3D space (-20 to 20 range approx)
+                // Note: Webcam X is mirrored
+                CONFIG.handPos.x = (0.5 - cx) * 30;
+                CONFIG.handPos.y = -(cy - 0.5) * 20;
+
+                // 2. Namaste Detection (Needs 2 hands)
+                if (hands.length === 2) {
+                    const h1 = hands[0];
+                    const h2 = hands[1];
+
+                    // Distance between Wrists (Index 0)
+                    const distWrists = Math.hypot(h1[0].x - h2[0].x, h1[0].y - h2[0].y);
+                    
+                    // Distance between Index Tips (Index 8)
+                    const distTips = Math.hypot(h1[8].x - h2[8].x, h1[8].y - h2[8].y);
+
+                    // Threshold: If wrists are close AND tips are close
+                    if (distWrists < 0.15 && distTips < 0.15) {
+                        if (!CONFIG.isNamaste) {
+                            CONFIG.isNamaste = true;
+                            CONFIG.shape = 'krishna';
+                            updateTargets('krishna');
+                            statusEl.innerText = "NAMASTE DETECTED";
+                            statusEl.className = "status-badge divine";
+                            namasteText.classList.add('visible');
+                        }
+                    } else {
+                        // Hands separated
+                        if (CONFIG.isNamaste) {
+                            CONFIG.isNamaste = false;
+                            CONFIG.shape = 'sphere'; // Return to default
+                            updateTargets('sphere');
+                            statusEl.className = "status-badge active";
+                            namasteText.classList.remove('visible');
+                        }
+                    }
+                }
+            } else {
+                statusEl.innerText = "CAMERA ACTIVE - NO HANDS";
+                statusEl.classList.remove('active', 'divine');
+                if(CONFIG.isNamaste) {
+                    CONFIG.isNamaste = false;
+                    updateTargets('sphere');
+                    namasteText.classList.remove('visible');
+                }
+            }
+        }
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.5
+        });
+        hands.onResults(onResults);
+
+        const cameraFeed = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            width: 640, height: 480
+        });
+
+        // Event Listeners
+        document.getElementById('start-btn').addEventListener('click', () => {
+            document.getElementById('intro-overlay').style.display = 'none';
+            cameraFeed.start();
+        });
+
+        document.querySelectorAll('.shape-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const shape = e.target.dataset.shape;
+                CONFIG.isNamaste = (shape === 'krishna');
+                CONFIG.shape = shape;
+                updateTargets(shape);
+                
+                // Visual Button update
+                document.querySelectorAll('.shape-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+
+                if(shape === 'krishna') document.getElementById('namaste-text').classList.add('visible');
+                else document.getElementById('namaste-text').classList.remove('visible');
+            });
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>

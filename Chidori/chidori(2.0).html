@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lightning Style: Chidori AR</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+
+    <!-- MediaPipe Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        :root {
+            --neon-cyan: #00f3ff;
+            --neon-blue: #0066ff;
+            --dark-bg: #050505;
+            --panel-bg: rgba(0, 10, 20, 0.85);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--dark-bg);
+            color: white;
+            font-family: 'Orbitron', sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Canvas Wrapper */
+        #canvas-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1); /* Mirror effect handled in CSS for visual layout, logic handled in JS */
+        }
+
+        /* Video element hidden, used as source */
+        .input_video {
+            display: none;
+        }
+
+        /* UI Overlay Layer - Not Mirrored */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            z-index: 10;
+        }
+
+        /* Header */
+        header {
+            text-align: center;
+            padding: 20px;
+            text-shadow: 0 0 10px var(--neon-cyan), 0 0 20px var(--neon-blue);
+        }
+
+        h1 {
+            font-weight: 900;
+            font-size: 2rem;
+            margin: 0;
+            letter-spacing: 4px;
+            color: white;
+            text-transform: uppercase;
+            border-bottom: 2px solid var(--neon-cyan);
+            display: inline-block;
+            padding-bottom: 10px;
+        }
+
+        .subtitle {
+            font-size: 0.8rem;
+            color: var(--neon-cyan);
+            letter-spacing: 2px;
+            margin-top: 5px;
+            opacity: 0.8;
+        }
+
+        /* Start Screen */
+        #start-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            pointer-events: auto;
+        }
+
+        button#start-btn {
+            background: transparent;
+            color: var(--neon-cyan);
+            border: 2px solid var(--neon-cyan);
+            padding: 15px 40px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.5rem;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 0 15px var(--neon-cyan);
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+        }
+
+        button#start-btn:hover {
+            background: var(--neon-cyan);
+            color: black;
+            box-shadow: 0 0 30px var(--neon-cyan), 0 0 50px var(--neon-cyan);
+        }
+
+        /* Chakra Gauge HUD */
+        #hud-footer {
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .hand-status {
+            width: 300px;
+            background: var(--panel-bg);
+            border: 1px solid var(--neon-cyan);
+            padding: 10px;
+            border-radius: 4px;
+            box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
+            opacity: 0; /* Hidden until hand detected */
+            transition: opacity 0.3s;
+        }
+
+        .hand-label {
+            font-size: 0.8rem;
+            color: var(--neon-cyan);
+            margin-bottom: 5px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .bar-container {
+            width: 100%;
+            height: 10px;
+            background: #111;
+            border: 1px solid #333;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, var(--neon-blue), var(--neon-cyan));
+            box-shadow: 0 0 10px var(--neon-cyan);
+            transition: width 0.1s linear;
+        }
+
+        .status-text {
+            font-size: 0.7rem;
+            color: white;
+            margin-top: 4px;
+            text-align: right;
+        }
+
+    </style>
+</head>
+<body>
+
+    <!-- Video Source (Hidden) -->
+    <video class="input_video"></video>
+
+    <div id="canvas-container">
+        <!-- Render Target -->
+        <canvas id="output_canvas"></canvas>
+        
+        <!-- UI Overlay -->
+        <div id="ui-layer">
+            <header>
+                <h1>Lightning Style: Chidori</h1>
+                <div class="subtitle">System Active // Hand Tracking Online</div>
+            </header>
+
+            <div id="hud-footer">
+                <!-- Left Hand HUD -->
+                <div class="hand-status" id="hud-left">
+                    <div class="hand-label"><span>LEFT HAND</span> <span id="val-left">0%</span></div>
+                    <div class="bar-container">
+                        <div class="bar-fill" id="bar-left"></div>
+                    </div>
+                    <div class="status-text" id="status-left">CHARGING...</div>
+                </div>
+
+                <!-- Right Hand HUD -->
+                <div class="hand-status" id="hud-right">
+                    <div class="hand-label"><span>RIGHT HAND</span> <span id="val-right">0%</span></div>
+                    <div class="bar-container">
+                        <div class="bar-fill" id="bar-right"></div>
+                    </div>
+                    <div class="status-text" id="status-right">CHARGING...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Start Modal -->
+    <div id="start-screen">
+        <button id="start-btn">Initialize System</button>
+    </div>
+
+    <script>
+        /**
+         * CHIDORI AR - MAIN APPLICATION LOGIC
+         * Author: Senior Creative Technologist
+         */
+
+        // --- Configuration ---
+        const MAX_CHARGE = 60; // Frames to reach full power (~2s at 30fps)
+        const DECAY_RATE = 2;  // Charge lost per frame when hand missing
+        const LIGHTNING_COLOR = { r: 180, g: 240, b: 255 }; // Pale Cyan
+        const CORE_COLOR = { r: 255, g: 255, b: 255 };
+        
+        // --- Globals ---
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const hudLeft = {
+            el: document.getElementById('hud-left'),
+            bar: document.getElementById('bar-left'),
+            val: document.getElementById('val-left'),
+            status: document.getElementById('status-left')
+        };
+        const hudRight = {
+            el: document.getElementById('hud-right'),
+            bar: document.getElementById('bar-right'),
+            val: document.getElementById('val-right'),
+            status: document.getElementById('status-right')
+        };
+
+        // State Machine for Hands
+        const handState = {
+            Left: { charge: 0, present: false, pos: {x:0, y:0}, wrist: {x:0, y:0} },
+            Right: { charge: 0, present: false, pos: {x:0, y:0}, wrist: {x:0, y:0} }
+        };
+
+        let camera = null;
+        let isRunning = false;
+
+        // --- Helper Math Functions ---
+
+        function dist(p1, p2) {
+            return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+        }
+
+        // Returns a random number between min and max
+        function random(min, max) {
+            return Math.random() * (max - min) + min;
+        }
+
+        // --- VFX Engine: Lightning Generation ---
+
+        /**
+         * Recursive Midpoint Displacement to draw jagged lightning
+         */
+        function drawLightningSegment(ctx, x1, y1, x2, y2, displace, iteration) {
+            if (iteration <= 0) {
+                ctx.lineTo(x2, y2);
+                return;
+            }
+
+            const midX = (x1 + x2) / 2;
+            const midY = (x1 + x2) / 2; // Typo fix: y1+y2
+            
+            // Calculate normal vector for displacement
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const length = Math.sqrt(dx*dx + dy*dy);
+            
+            // Perpendicular vector normalized
+            const nx = -dy / length;
+            const ny = dx / length;
+
+            // Random displacement amount
+            const amount = (Math.random() - 0.5) * displace;
+
+            const tx = (x1 + x2) / 2 + nx * amount;
+            const ty = (y1 + y2) / 2 + ny * amount;
+
+            drawLightningSegment(ctx, x1, y1, tx, ty, displace / 2, iteration - 1);
+            drawLightningSegment(ctx, tx, ty, x2, y2, displace / 2, iteration - 1);
+        }
+
+        // Iterative approach for better control over width and glow
+        function generateBoltPoints(start, end, segmentCount, offsetAmount) {
+            let points = [start, end];
+            for (let i = 0; i < segmentCount; i++) {
+                const newPoints = [];
+                for (let j = 0; j < points.length - 1; j++) {
+                    const p1 = points[j];
+                    const p2 = points[j+1];
+                    
+                    const midX = (p1.x + p2.x) / 2;
+                    const midY = (p1.y + p2.y) / 2;
+                    
+                    // Perpendicular offset
+                    const dx = p2.x - p1.x;
+                    const dy = p2.y - p1.y;
+                    const len = Math.sqrt(dx*dx + dy*dy);
+                    if(len === 0) continue;
+
+                    const nx = -dy/len;
+                    const ny = dx/len;
+
+                    // Reduce offset as segments get smaller (fractal nature)
+                    const scale = offsetAmount * Math.pow(0.55, i); 
+                    const noise = (Math.random() - 0.5) * 2 * scale;
+                    
+                    newPoints.push(p1);
+                    newPoints.push({
+                        x: midX + nx * noise,
+                        y: midY + ny * noise
+                    });
+                }
+                newPoints.push(points[points.length-1]);
+                points = newPoints;
+            }
+            return points;
+        }
+
+        function drawLightningBolt(ctx, points, width, alpha) {
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for(let i=1; i<points.length; i++) {
+                ctx.lineTo(points[i].x, points[i].y);
+            }
+            
+            ctx.strokeStyle = `rgba(200, 255, 255, ${alpha})`;
+            ctx.lineWidth = width;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#00FFFF';
+            ctx.stroke();
+
+            // Inner white core
+            ctx.strokeStyle = `rgba(255, 255, 255, ${alpha + 0.2})`;
+            ctx.lineWidth = width / 2;
+            ctx.shadowBlur = 5;
+            ctx.stroke();
+            
+            ctx.shadowBlur = 0; // Reset
+        }
+
+        // --- Main Render Pipeline ---
+
+        function onResults(results) {
+            // 1. Setup Canvas & Handle Mirroring
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+            
+            // Mirror Context for drawing video and effects
+            canvasCtx.save();
+            canvasCtx.scale(-1, 1);
+            canvasCtx.translate(-canvasElement.width, 0);
+
+            // 2. Global VFX: Screen Shake Calculation
+            // Determine max charge to calculate shake intensity
+            let maxCurrentCharge = Math.max(handState.Left.charge, handState.Right.charge);
+            let shakeIntensity = 0;
+            
+            if (maxCurrentCharge > 50) {
+                // Exponential shake curve
+                shakeIntensity = Math.pow((maxCurrentCharge - 50), 1.5) * 0.5;
+            }
+
+            if (shakeIntensity > 0) {
+                const sx = (Math.random() - 0.5) * shakeIntensity;
+                const sy = (Math.random() - 0.5) * shakeIntensity;
+                canvasCtx.translate(sx, sy);
+            }
+
+            // 3. Draw Video Feed
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            // 4. Global VFX: Screen Flash (Peak Power)
+            if (maxCurrentCharge >= MAX_CHARGE && Math.random() > 0.9) {
+                canvasCtx.fillStyle = "rgba(255, 255, 255, 0.15)";
+                canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+            }
+
+            // 5. Update State & Draw Hands
+            updateHandState(results);
+            drawEffects();
+
+            canvasCtx.restore(); // Restore mirroring and shake
+        }
+
+        function updateHandState(results) {
+            // Reset presence for decay logic
+            handState.Left.present = false;
+            handState.Right.present = false;
+
+            if (results.multiHandLandmarks) {
+                for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                    const landmarks = results.multiHandLandmarks[i];
+                    const label = results.multiHandedness[i].label; // "Left" or "Right"
+
+                    // Store coordinates (scaled to canvas)
+                    // Landmark 9: Middle Finger MCP (Core of Chidori)
+                    // Landmark 0: Wrist (For vector calc)
+                    const core = landmarks[9];
+                    const wrist = landmarks[0];
+
+                    if (handState[label]) {
+                        handState[label].present = true;
+                        handState[label].pos = { 
+                            x: core.x * canvasElement.width, 
+                            y: core.y * canvasElement.height 
+                        };
+                        handState[label].wrist = {
+                            x: wrist.x * canvasElement.width,
+                            y: wrist.y * canvasElement.height
+                        };
+                        
+                        // Charge up
+                        if (handState[label].charge < MAX_CHARGE) {
+                            handState[label].charge++;
+                        }
+                    }
+                }
+            }
+
+            // Decay logic
+            ['Left', 'Right'].forEach(hand => {
+                if (!handState[hand].present && handState[hand].charge > 0) {
+                    handState[hand].charge = Math.max(0, handState[hand].charge - DECAY_RATE);
+                }
+                updateHUD(hand);
+            });
+        }
+
+        function updateHUD(hand) {
+            const data = hand === 'Left' ? hudLeft : hudRight;
+            const charge = handState[hand].charge;
+            const pct = Math.floor((charge / MAX_CHARGE) * 100);
+            
+            // Update Visuals
+            data.el.style.opacity = (charge > 0 || handState[hand].present) ? 1 : 0;
+            data.bar.style.width = `${pct}%`;
+            data.val.innerText = `${pct}%`;
+            
+            if (charge === MAX_CHARGE) {
+                data.status.innerText = "CHIDORI ACTIVE";
+                data.status.style.color = "#FFF";
+                data.bar.style.background = "white"; // Overcharge color
+            } else {
+                data.status.innerText = "CHARGING...";
+                data.status.style.color = "#CCC";
+                data.bar.style.background = `linear-gradient(90deg, var(--neon-blue), var(--neon-cyan))`;
+            }
+        }
+
+        function drawEffects() {
+            ['Left', 'Right'].forEach(hand => {
+                const s = handState[hand];
+                if (s.charge > 5) { // Minimum charge to see anything
+                    const x = s.pos.x;
+                    const y = s.pos.y;
+                    const intensity = s.charge / MAX_CHARGE; // 0.0 to 1.0
+
+                    // --- Phase 1: The Core ---
+                    // Flickering radial gradient
+                    const flicker = 0.8 + Math.random() * 0.4;
+                    const radius = (30 + (intensity * 40)) * flicker;
+
+                    const gradient = canvasCtx.createRadialGradient(x, y, 5, x, y, radius);
+                    gradient.addColorStop(0, `rgba(255, 255, 255, ${intensity})`);
+                    gradient.addColorStop(0.4, `rgba(0, 243, 255, ${intensity * 0.8})`);
+                    gradient.addColorStop(1, `rgba(0, 100, 255, 0)`);
+
+                    canvasCtx.fillStyle = gradient;
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(x, y, radius, 0, 2 * Math.PI);
+                    canvasCtx.fill();
+
+                    // --- Phase 1.5: Contained Lightning (Sparks) ---
+                    // Bolts contained within radius
+                    const sparkCount = Math.floor(3 + intensity * 5);
+                    for(let i=0; i<sparkCount; i++) {
+                        const angle = Math.random() * Math.PI * 2;
+                        const dist = random(10, radius * 0.8);
+                        const endX = x + Math.cos(angle) * dist;
+                        const endY = y + Math.sin(angle) * dist;
+                        
+                        const points = generateBoltPoints({x,y}, {x:endX, y:endY}, 3, 10);
+                        drawLightningBolt(canvasCtx, points, 2, intensity);
+                    }
+
+                    // --- Phase 2: Peak Power (Wild Bolts) ---
+                    if (s.charge >= 55) {
+                        const boltCount = 8; // Major bolts
+                        for(let i=0; i<boltCount; i++) {
+                            const angle = Math.random() * Math.PI * 2;
+                            const len = random(100, 300); // Shoot out far
+                            const endX = x + Math.cos(angle) * len;
+                            const endY = y + Math.sin(angle) * len;
+                            
+                            // More recursion/segments for jagged look
+                            const points = generateBoltPoints({x,y}, {x:endX, y:endY}, 5, 40);
+                            drawLightningBolt(canvasCtx, points, 3 + Math.random()*2, 0.9);
+                        }
+
+                        // --- The "Arm Crawl" Vector Logic ---
+                        // Vector: Wrist(0) -> MCP(9). We want to go Wrist -> Elbow (approx).
+                        // So we take vector 9->0 and extend it.
+                        const vx = s.wrist.x - s.pos.x; 
+                        const vy = s.wrist.y - s.pos.y;
+                        
+                        // Normalize
+                        const mag = Math.sqrt(vx*vx + vy*vy);
+                        if(mag > 0) {
+                            const nx = vx / mag;
+                            const ny = vy / mag;
+                            
+                            // Extend way off screen to ensure it covers arm
+                            const extendLen = Math.max(canvasElement.width, canvasElement.height);
+                            const targetX = s.wrist.x + nx * extendLen;
+                            const targetY = s.wrist.y + ny * extendLen;
+
+                            // Draw 2-3 tendrils crawling up the arm
+                            for(let k=0; k<3; k++) {
+                                // Randomize end point slightly to spread around arm
+                                const spread = 50;
+                                const spreadX = targetX + (Math.random()-0.5)*spread;
+                                const spreadY = targetY + (Math.random()-0.5)*spread;
+
+                                const points = generateBoltPoints(s.wrist, {x:spreadX, y:spreadY}, 6, 30);
+                                drawLightningBolt(canvasCtx, points, 2, 0.7);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // --- Initialization ---
+
+        function init() {
+            const hands = new Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }});
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.7
+            });
+
+            hands.onResults(onResults);
+
+            camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 1280,
+                height: 720
+            });
+
+            camera.start();
+            isRunning = true;
+            document.getElementById('start-screen').style.display = 'none';
+        }
+
+        // --- Event Listeners ---
+
+        document.getElementById('start-btn').addEventListener('click', () => {
+            init();
+        });
+
+        window.addEventListener('resize', () => {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+        });
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR Gesture Shooter - Anti-Crash Build</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        
+        /* Hidden video element for processing */
+        #input-video { display: none; }
+
+        /* UI Layer */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
+        #score-board { position: absolute; top: 20px; left: 20px; color: #0ff; font-size: 24px; font-weight: bold; text-shadow: 0 0 5px #0ff; }
+        #instructions { position: absolute; bottom: 20px; width: 100%; text-align: center; color: rgba(255,255,255,0.7); font-size: 14px; }
+        
+        /* Floating Text VFX */
+        .vfx-text { position: absolute; font-weight: 900; font-size: 20px; animation: floatUp 0.8s forwards; pointer-events: none; }
+        @keyframes floatUp {
+            0% { transform: translateY(0) scale(1); opacity: 1; }
+            100% { transform: translateY(-50px) scale(1.5); opacity: 0; }
+        }
+
+        /* Loading Screen */
+        #loader {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #111; z-index: 100; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; color: white;
+        }
+        .spinner {
+            width: 50px; height: 50px; border: 5px solid #333; border-top: 5px solid #0ff;
+            border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        #status-text { color: #888; margin-top: 10px; font-size: 12px; }
+    </style>
+</head>
+<body>
+
+    <!-- Loading Overlay -->
+    <div id="loader">
+        <div class="spinner"></div>
+        <h2 id="loading-msg">INITIALIZING SYSTEMS...</h2>
+        <div id="status-text">Loading WASM modules & AI Models</div>
+    </div>
+
+    <!-- UI -->
+    <div id="ui-layer">
+        <div id="score-board">SCORE: 0</div>
+        <div id="instructions">GESTURE: Point Index Finger to AIM. Tap Thumb to Index Base to SHOOT.</div>
+    </div>
+
+    <!-- Hidden Video & Canvas -->
+    <video id="input-video" playsinline></video>
+    <div id="canvas-container"></div>
+
+    <!-- IMPORT: Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <!-- IMPORT: MediaPipe Hands (VERSION LOCKED TO PREVENT CRASH) -->
+    <!-- Using specific version 0.4.1646424915 as requested -->
+    <script src="https://unpkg.com/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+    <script>
+        // --- 1. SYSTEM STATE & CONFIGURATION ---
+        const CONFIG = {
+            AI_INTERVAL_MS: 50, // Limit AI detection to ~20 FPS to save overhead for Rendering
+            MAGNET_RADIUS: 0.15, // Screen space radius for aim assist
+            DISC_SPEED: 0.02,
+            SPAWN_RADIUS: 8
+        };
+
+        const state = {
+            score: 0,
+            isLoading: true,
+            lastAITime: 0,
+            hand: null, // Stores { x, y } normalized coordinates
+            isTriggerPressed: false,
+            triggerCooldown: false
+        };
+
+        // --- 2. THREE.JS SETUP ---
+        const scene = new THREE.Scene();
+        // Perspective camera
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.z = 5;
+
+        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(0, 10, 5);
+        scene.add(dirLight);
+
+        // Webcam Background Texture
+        const videoElement = document.getElementById('input-video');
+        const videoTexture = new THREE.VideoTexture(videoElement);
+        scene.background = videoTexture;
+
+        // --- 3. GAME OBJECTS ---
+        
+        // Laser Line
+        const laserGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1)]);
+        const laserMat = new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2 });
+        const laserLine = new THREE.Line(laserGeo, laserMat);
+        // We will move this line based on hand position
+        laserLine.frustumCulled = false;
+        scene.add(laserLine);
+
+        // Reticle (Crosshair)
+        const reticleGeo = new THREE.RingGeometry(0.05, 0.06, 32);
+        const reticleMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
+        const reticle = new THREE.Mesh(reticleGeo, reticleMat);
+        scene.add(reticle);
+
+        // Enemies (Discs)
+        let enemies = [];
+        const discGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.1, 16);
+        discGeometry.rotateX(Math.PI / 2); // Make it face camera-ish
+        const discMaterial = new THREE.MeshPhongMaterial({ color: 0xff0055, shininess: 100 });
+
+        function spawnEnemy() {
+            const disc = new THREE.Mesh(discGeometry, discMaterial.clone());
+            
+            // Random position on edge of a circle
+            const angle = Math.random() * Math.PI * 2;
+            disc.position.x = Math.cos(angle) * CONFIG.SPAWN_RADIUS;
+            disc.position.y = Math.sin(angle) * CONFIG.SPAWN_RADIUS * 0.6; // Flatten y slightly
+            disc.position.z = -5; // Start deeper
+            
+            // Look at center
+            disc.lookAt(0,0,0);
+            
+            disc.userData = { id: Math.random(), active: true };
+            scene.add(disc);
+            enemies.push(disc);
+        }
+
+        // Initialize 4 enemies
+        for(let i=0; i<4; i++) spawnEnemy();
+
+        // --- 4. MEDIAPIPE & GESTURE LOGIC ---
+
+        function onResults(results) {
+            // Hide loader on first successful result
+            if (state.isLoading && results.multiHandLandmarks) {
+                document.getElementById('loader').style.display = 'none';
+                state.isLoading = false;
+            }
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // Get Key Landmarks
+                const indexTip = landmarks[8];  // Aiming point
+                const thumbTip = landmarks[4];  // Trigger point
+                const indexBase = landmarks[5]; // Reference for trigger
+
+                // 1. Aiming (Inverted X because webcam is mirrored)
+                // Smooth aiming could be added here, but raw is faster for now
+                state.hand = {
+                    x: (1 - indexTip.x) * 2 - 1, // Convert 0..1 to -1..1
+                    y: (1 - indexTip.y) * 2 - 1
+                };
+
+                // 2. Gesture Logic: Pistol Trigger
+                // Calculate distance between thumb tip and index base knuckle
+                const distance = Math.sqrt(
+                    Math.pow(thumbTip.x - indexBase.x, 2) + 
+                    Math.pow(thumbTip.y - indexBase.y, 2)
+                );
+
+                // Threshold logic (Simple "Pinch/Tap" detection)
+                // If distance is very small, trigger is pulled
+                if (distance < 0.05) { 
+                    if (!state.isTriggerPressed && !state.triggerCooldown) {
+                        fireShot();
+                        state.isTriggerPressed = true;
+                        state.triggerCooldown = true;
+                        setTimeout(() => { state.triggerCooldown = false }, 200); // Fire rate limit
+                    }
+                } else {
+                    state.isTriggerPressed = false;
+                }
+            } else {
+                state.hand = null;
+            }
+        }
+
+        // Initialize Hands with Crash-Safe Config
+        const hands = new Hands({locateFile: (file) => {
+            // Ensure we use the exact pinned version for WASM assets too
+            return `https://unpkg.com/@mediapipe/hands@0.4.1646424915/${file}`;
+        }});
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 0, // 0 is fastest (Lite), prevents lag
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults(onResults);
+
+        // Webcam setup
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: 1280, height: 720, facingMode: 'user' } 
+                });
+                videoElement.srcObject = stream;
+                await videoElement.play();
+                document.getElementById('status-text').innerText = "Camera Active. Loading Model...";
+            } catch (e) {
+                alert("Camera access denied or error: " + e);
+            }
+        }
+        startCamera();
+
+        // --- 5. AUDIO & VFX ---
+
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            if (type === 'hit') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+            } else if (type === 'shot') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.15);
+                gainNode.gain.setValueAtTime(0.05, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.15);
+            }
+        }
+
+        function showFloatingText(text, x, y, color) {
+            const div = document.createElement('div');
+            div.className = 'vfx-text';
+            div.innerText = text;
+            div.style.color = color;
+            // Convert NDC x,y to pixel coordinates
+            const px = (x + 1) / 2 * window.innerWidth;
+            const py = -(y - 1) / 2 * window.innerHeight;
+            div.style.left = px + 'px';
+            div.style.top = py + 'px';
+            document.getElementById('ui-layer').appendChild(div);
+            setTimeout(() => div.remove(), 900);
+        }
+
+        // --- 6. GAMEPLAY LOGIC ---
+
+        function updateLaserAndReticle() {
+            if (!state.hand) {
+                laserLine.visible = false;
+                reticle.visible = false;
+                return;
+            }
+
+            laserLine.visible = true;
+            reticle.visible = true;
+
+            // Base aiming vector (NDC)
+            let aimX = state.hand.x;
+            let aimY = state.hand.y;
+
+            // MAGNETIC AIM ASSIST
+            // Project enemies to screen space to check proximity
+            let bestTarget = null;
+            let minDist = CONFIG.MAGNET_RADIUS;
+
+            enemies.forEach(enemy => {
+                if(!enemy.visible) return;
+                
+                // Clone position to project
+                const p = enemy.position.clone();
+                p.project(camera); // p is now in NDC
+                
+                const dist = Math.sqrt(Math.pow(p.x - aimX, 2) + Math.pow(p.y - aimY, 2));
+                
+                if (dist < minDist) {
+                    minDist = dist;
+                    bestTarget = p; // The screen space position of the enemy
+                }
+            });
+
+            // If Magnet snapped, override aim
+            if (bestTarget) {
+                // Lerp for smooth snap
+                aimX += (bestTarget.x - aimX) * 0.4;
+                aimY += (bestTarget.y - aimY) * 0.4;
+                reticle.material.color.setHex(0xff0000); // Red when locked
+            } else {
+                reticle.material.color.setHex(0x00ffff); // Cyan normal
+            }
+
+            // Update Reticle UI Position
+            reticle.position.set(aimX * (camera.aspect * 2.5), aimY * 2.5, -5); 
+            // Note: Multiplying to approximate world space at depth -5, simpler than Raycasting for the visual reticle itself
+
+            // Update Laser Geometry
+            // Start at bottom right (simulate holding gun)
+            const startVec = new THREE.Vector3(1.5, -1.5, -2); 
+            // End at reticle world position
+            const vector = new THREE.Vector3(aimX, aimY, 0.5).unproject(camera);
+            const dir = vector.sub(camera.position).normalize();
+            const distance = -10; // how far laser goes
+            const endVec = camera.position.clone().add(dir.multiplyScalar(Math.abs(distance)));
+
+            const positions = laserLine.geometry.attributes.position.array;
+            // Point 0
+            positions[0] = startVec.x; positions[1] = startVec.y; positions[2] = startVec.z;
+            // Point 1
+            positions[3] = endVec.x; positions[4] = endVec.y; positions[5] = endVec.z;
+            laserLine.geometry.attributes.position.needsUpdate = true;
+
+            // Save actual aim vector for shooting
+            state.aimVector = { x: aimX, y: aimY };
+        }
+
+        function fireShot() {
+            if (!state.aimVector) return;
+
+            playSound('shot');
+
+            // Raycast Detection
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(state.aimVector, camera);
+
+            const intersects = raycaster.intersectObjects(enemies);
+
+            if (intersects.length > 0) {
+                // HIT!
+                const hitObj = intersects[0].object;
+                
+                // Audio
+                playSound('hit');
+                
+                // VFX
+                showFloatingText("HIT!", state.aimVector.x, state.aimVector.y, '#0f0');
+                
+                // Logic: Kill & Respawn
+                scene.remove(hitObj);
+                enemies = enemies.filter(e => e !== hitObj);
+                
+                state.score += 100;
+                document.getElementById('score-board').innerText = "SCORE: " + state.score;
+
+                spawnEnemy(); // Maintain count
+
+            } else {
+                // MISS
+                showFloatingText("MISS", state.aimVector.x, state.aimVector.y, '#fff');
+            }
+        }
+
+        function updateEnemies() {
+            enemies.forEach(disc => {
+                // Move towards center (0,0,0)
+                const dir = new THREE.Vector3(0,0,0).sub(disc.position).normalize();
+                disc.position.add(dir.multiplyScalar(CONFIG.DISC_SPEED));
+                
+                // Rotate disc
+                disc.rotation.z += 0.1;
+
+                // Reset if it gets too close (player missed)
+                if (disc.position.length() < 1) {
+                    scene.remove(disc);
+                    enemies = enemies.filter(e => e !== disc);
+                    spawnEnemy();
+                    // Optional: Penalty score
+                }
+            });
+        }
+
+        // --- 7. MAIN LOOP (Anti-Crash Architecture) ---
+
+        function animate(time) {
+            requestAnimationFrame(animate);
+
+            // A. GAMEPLAY UPDATE
+            if (!state.isLoading) {
+                updateEnemies();
+                updateLaserAndReticle();
+            }
+
+            // B. RENDER (Always runs at max FPS)
+            renderer.render(scene, camera);
+
+            // C. AI DETECTION (Throttled & Protected)
+            // Only process AI if enough time has passed (limits to CONFIG.AI_INTERVAL_MS)
+            if (time - state.lastAITime > CONFIG.AI_INTERVAL_MS && videoElement.readyState === 4) {
+                state.lastAITime = time;
+                
+                // WRAPPED IN TRY-CATCH FOR CRASH SAFETY
+                try {
+                    // Send video frame to MediaPipe
+                    hands.send({image: videoElement});
+                } catch (error) {
+                    console.error("MediaPipe Crash Prevented:", error);
+                    // Optional: Reset strategies could go here
+                }
+            }
+        }
+
+        // Handle Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start Loop
+        animate(0);
+
+    </script>
+</body>
+</html>

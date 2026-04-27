@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gesture Racer</title>
+    
+    <!-- MediaPipe Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #111;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        /* Game Container */
+        #game-container {
+            position: relative;
+            width: 800px;
+            height: 600px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            background: #222;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Webcam Feed (Mirrored) */
+        #webcam-feed {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 160px;
+            height: 120px;
+            transform: scaleX(-1); /* Mirror effect */
+            border: 2px solid #00ffcc;
+            border-radius: 8px;
+            z-index: 10;
+            opacity: 0.8;
+        }
+
+        /* UI Overlay */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* Let clicks pass through to canvas if needed */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #score-board {
+            margin-top: 20px;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 0 #000;
+        }
+
+        /* Screens */
+        .screen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.85);
+            padding: 40px;
+            border-radius: 10px;
+            text-align: center;
+            border: 1px solid #444;
+            pointer-events: auto;
+            display: none;
+        }
+
+        .screen.active {
+            display: block;
+        }
+
+        h1 { margin-top: 0; color: #00ffcc; }
+        p { color: #ccc; }
+
+        button {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 5px;
+            margin-top: 20px;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #00ccaa;
+        }
+
+        #loading-text {
+            color: #ffff00;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- The visual game canvas -->
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        
+        <!-- The invisible video element for MediaPipe processing -->
+        <video id="input-video" style="display:none"></video>
+        
+        <!-- The visual feedback of the webcam -->
+        <canvas id="webcam-feed"></canvas>
+
+        <!-- UI Layer -->
+        <div id="ui-layer">
+            <div id="score-board">Score: 0</div>
+            
+            <div id="start-screen" class="screen active">
+                <h1>Gesture Racer</h1>
+                <p>Raise your hand to the camera.</p>
+                <p>Move hand <b>Left</b> or <b>Right</b> to steer.</p>
+                <p id="loading-text">Loading AI Models...</p>
+                <button id="start-btn" disabled>START GAME</button>
+            </div>
+
+            <div id="game-over-screen" class="screen">
+                <h1 style="color: #ff4444;">CRASH!</h1>
+                <p>Final Score: <span id="final-score">0</span></p>
+                <button onclick="resetGame()">TRY AGAIN</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * CONFIGURATION
+         */
+        const CANVAS_WIDTH = 800;
+        const CANVAS_HEIGHT = 600;
+        const LANE_WIDTH = 120; // Visual width of lanes at bottom
+        const HORIZON_Y = 250;  // Vanishing point Y
+        
+        // Game State
+        const STATE = {
+            START: 0,
+            PLAYING: 1,
+            GAMEOVER: 2
+        };
+        
+        let currentState = STATE.START;
+        let score = 0;
+        let speed = 5;
+        let gameTime = 0;
+
+        // Player
+        let playerLane = 0; // -1 (Left), 0 (Center), 1 (Right)
+        let playerX = 0;    // Interpolated X for smooth animation
+        
+        // Obstacles
+        let obstacles = [];
+
+        // Hand Tracking Data
+        let handX = 0.5; // Normalized 0.0 to 1.0 (0.5 is center)
+        let isHandDetected = false;
+
+        /**
+         * SETUP ELEMENTS
+         */
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const webcamCanvas = document.getElementById('webcam-feed');
+        const webcamCtx = webcamCanvas.getContext('2d');
+        const scoreEl = document.getElementById('score-board');
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const finalScoreEl = document.getElementById('final-score');
+        const startBtn = document.getElementById('start-btn');
+        const loadingText = document.getElementById('loading-text');
+
+        /**
+         * MEDIAPIPE HANDS SETUP
+         */
+        const videoElement = document.getElementById('input-video');
+
+        function onResults(results) {
+            // Draw webcam feed to the mini canvas
+            webcamCtx.save();
+            webcamCtx.clearRect(0, 0, webcamCanvas.width, webcamCanvas.height);
+            webcamCtx.drawImage(results.image, 0, 0, webcamCanvas.width, webcamCanvas.height);
+            
+            // Draw landmarks overlay
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                isHandDetected = true;
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // Draw skeleton
+                drawConnectors(webcamCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+                drawLandmarks(webcamCtx, landmarks, {color: '#FF0000', lineWidth: 1});
+
+                // Control Logic: Use the wrist (index 0) or middle finger mcp (index 9) for stability
+                // x is normalized [0.0, 1.0]. 
+                // Because we mirrored the CSS, we need to treat input logically.
+                // MediaPipe output is NOT mirrored by default, so:
+                // 0.0 is user's right (camera left), 1.0 is user's left (camera right).
+                // Let's invert it for intuitive calculation.
+                let rawX = landmarks[9].x; 
+                handX = 1.0 - rawX; // Invert to match screen coordinates (0=left, 1=right)
+                
+            } else {
+                isHandDetected = false;
+            }
+            webcamCtx.restore();
+        }
+
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults(onResults);
+
+        // Initialize Camera
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 320,
+            height: 240
+        });
+
+        camera.start()
+            .then(() => {
+                loadingText.style.display = 'none';
+                startBtn.disabled = false;
+                startBtn.innerText = "START GAME";
+            })
+            .catch(err => {
+                loadingText.innerText = "Error: Allow Camera Access!";
+                console.error(err);
+            });
+
+        /**
+         * GAME LOGIC
+         */
+
+        startBtn.addEventListener('click', () => {
+            currentState = STATE.PLAYING;
+            startScreen.classList.remove('active');
+            resetGameVariables();
+            requestAnimationFrame(gameLoop);
+        });
+
+        function resetGame() {
+            gameOverScreen.classList.remove('active');
+            currentState = STATE.PLAYING;
+            resetGameVariables();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function resetGameVariables() {
+            score = 0;
+            speed = 5;
+            obstacles = [];
+            gameTime = 0;
+            playerLane = 0;
+            playerX = 0;
+        }
+
+        function update() {
+            if (currentState !== STATE.PLAYING) return;
+
+            // 1. Handle Input
+            if (isHandDetected) {
+                // Deadzones to prevent jitter
+                if (handX < 0.4) playerLane = -1;      // Left
+                else if (handX > 0.6) playerLane = 1;  // Right
+                else playerLane = 0;                   // Center
+            }
+
+            // Smooth car movement (Lerp)
+            // Target X is lane index * spacing
+            let targetX = playerLane * (LANE_WIDTH * 1.2); 
+            playerX += (targetX - playerX) * 0.15; // smooth factor
+
+            // 2. Spawn Obstacles
+            // Increase speed over time
+            speed = 5 + (score / 500);
+            
+            // Random spawn chance
+            if (Math.random() < 0.02 + (score/10000)) {
+                // Pick a lane (-1, 0, 1)
+                let lane = Math.floor(Math.random() * 3) - 1;
+                // Ensure we don't spawn impossible walls (simple logic: random is okay for now)
+                obstacles.push({
+                    lane: lane,
+                    z: 1000, // Start far away
+                    passed: false
+                });
+            }
+
+            // 3. Move Obstacles
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                let obs = obstacles[i];
+                obs.z -= speed;
+
+                // Collision Detection
+                // If obstacle is close in Z (depth) and effectively same lane
+                if (obs.z < 100 && obs.z > 0) {
+                    // Check horizontal overlap. 
+                    // Player is roughly at integer lanes. 
+                    if (obs.lane === playerLane) {
+                        gameOver();
+                    }
+                }
+
+                // Cleanup
+                if (obs.z <= 0) {
+                    obstacles.splice(i, 1);
+                    score += 10;
+                }
+            }
+
+            score++;
+            scoreEl.innerText = "Score: " + score;
+        }
+
+        function gameOver() {
+            currentState = STATE.GAMEOVER;
+            finalScoreEl.innerText = score;
+            gameOverScreen.classList.add('active');
+        }
+
+        /**
+         * RENDERING (Pseudo-3D)
+         */
+        function draw() {
+            // Clear Screen
+            ctx.fillStyle = '#1a1a1a'; // Dark asphalt
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            // Draw Sky
+            ctx.fillStyle = '#050510';
+            ctx.fillRect(0, 0, CANVAS_WIDTH, HORIZON_Y);
+
+            // Pseudo-3D Helper
+            // Projects a 3D point (x, z) to 2D canvas (x, y)
+            // Z=0 is camera, Z=1000 is horizon. 
+            // Actually, let's reverse: Z=1000 is far, Z=0 is near.
+            function project(x, z, width) {
+                // Perspective scale
+                // The further away (higher z), the smaller the scale.
+                // We fake Z depth. 
+                // Let's assume obstacles move from Z=1000 to Z=0.
+                // Projection factor = dist / (dist + z)
+                
+                // Simple approach:
+                // Horizon is at Y = 250
+                // Bottom is at Y = 600
+                const scale = 200 / (200 + z); 
+                
+                const x2d = (x * scale) + (CANVAS_WIDTH / 2);
+                const y2d = (CANVAS_HEIGHT / 2) + ((1 - scale) * (CANVAS_HEIGHT/2)); 
+                
+                // Adjust horizon offset
+                const roadHeight = CANVAS_HEIGHT - HORIZON_Y;
+                const projectedY = HORIZON_Y + (roadHeight * (1 - (z / 1000)));
+
+                return {
+                    x: (CANVAS_WIDTH/2) + (x * (LANE_WIDTH * 2) / z), // Simple perspective math
+                    y: projectedY,
+                    s: scale
+                };
+            }
+
+            // Better 2.5D Projection logic specifically for this track
+            // Z goes from 0 (player) to 100 (horizon)
+            function getScreenCoords(laneOffset, depthPercent) {
+                // depthPercent: 0 = player, 1 = horizon
+                // Width at horizon is small, width at bottom is large.
+                
+                const y = CANVAS_HEIGHT - (depthPercent * (CANVAS_HEIGHT - HORIZON_Y));
+                
+                // Perspective widening
+                // Width at y
+                const roadWidthAtY = (LANE_WIDTH * 3) + ((1-depthPercent) * 600);
+                
+                const centerX = CANVAS_WIDTH / 2;
+                const x = centerX + (laneOffset * (roadWidthAtY / 3)); // Divide by 3 lanes
+                
+                return { x, y, width: roadWidthAtY };
+            }
+
+            // Draw Road
+            ctx.save();
+            ctx.beginPath();
+            
+            // Define Road Polygon
+            const pNearLeft = getScreenCoords(-1.5, 0);
+            const pNearRight = getScreenCoords(1.5, 0);
+            const pFarLeft = getScreenCoords(-1.5, 1);
+            const pFarRight = getScreenCoords(1.5, 1);
+
+            ctx.moveTo(pFarLeft.x, pFarLeft.y);
+            ctx.lineTo(pFarRight.x, pFarRight.y);
+            ctx.lineTo(pNearRight.x, pNearRight.y);
+            ctx.lineTo(pNearLeft.x, pNearLeft.y);
+            ctx.fillStyle = '#333';
+            ctx.fill();
+
+            // Draw Lane Markers
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 2;
+            
+            // Left Line
+            let p1 = getScreenCoords(-0.5, 0);
+            let p2 = getScreenCoords(-0.5, 1);
+            ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+            
+            // Right Line
+            p1 = getScreenCoords(0.5, 0);
+            p2 = getScreenCoords(0.5, 1);
+            ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+
+            ctx.restore();
+
+            // Draw Obstacles (Painter's Algorithm: Draw far items first)
+            // Sort obstacles by Z (depth) descending
+            obstacles.sort((a, b) => b.z - a.z);
+
+            obstacles.forEach(obs => {
+                // Normalize Z to 0-1 range for getScreenCoords (1 is far, 0 is near)
+                // Obs.z is 1000 to 0.
+                let depthPct = obs.z / 1000;
+                
+                if (depthPct < 0 || depthPct > 1) return;
+
+                let coords = getScreenCoords(obs.lane, depthPct);
+                
+                // Size of obstacle changes with depth
+                let size = 40 + (1 - depthPct) * 80;
+
+                ctx.fillStyle = '#ff3366'; // Neon Red
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = '#ff3366';
+                
+                // Draw Box
+                ctx.fillRect(coords.x - size/2, coords.y - size, size, size);
+                
+                // Reset shadow
+                ctx.shadowBlur = 0;
+            });
+
+            // Draw Player Car
+            // Player is always at near bottom (depth ~ 0.05)
+            // playerX is basically the lane offset interpolated
+            // Map playerX (approx -150 to 150 visual units) to laneOffset (-1 to 1)
+            let visualLaneOffset = playerX / (LANE_WIDTH * 1.2);
+            let playerCoords = getScreenCoords(visualLaneOffset, 0.1);
+            let playerSize = 80;
+
+            ctx.fillStyle = '#00ffcc'; // Neon Blue
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#00ffcc';
+            
+            // Simple Car Shape
+            ctx.fillRect(playerCoords.x - playerSize/2, playerCoords.y - playerSize/2, playerSize, playerSize/1.5);
+            
+            // Details (Lights)
+            ctx.fillStyle = '#ffff00';
+            ctx.fillRect(playerCoords.x - playerSize/2 + 5, playerCoords.y - playerSize/2, 15, 10);
+            ctx.fillRect(playerCoords.x + playerSize/2 - 20, playerCoords.y - playerSize/2, 15, 10);
+
+            ctx.shadowBlur = 0;
+            
+            // Hand Feedback HUD
+            // Draw a bar at the bottom showing detection
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(200, 550, 400, 20); // Track
+            
+            if (isHandDetected) {
+                let indicatorX = 200 + (handX * 400);
+                ctx.fillStyle = '#00ffcc';
+                ctx.beginPath();
+                ctx.arc(indicatorX, 560, 10, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Lane Zones
+                ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+                ctx.beginPath();
+                ctx.moveTo(200 + (0.4 * 400), 550); ctx.lineTo(200 + (0.4 * 400), 570);
+                ctx.moveTo(200 + (0.6 * 400), 550); ctx.lineTo(200 + (0.6 * 400), 570);
+                ctx.stroke();
+            } else {
+                ctx.fillStyle = 'red';
+                ctx.fillText("HAND NOT DETECTED", 330, 540);
+            }
+        }
+
+        function gameLoop() {
+            if (currentState === STATE.PLAYING) {
+                update();
+                draw();
+                requestAnimationFrame(gameLoop);
+            } else if (currentState === STATE.GAMEOVER) {
+                // Stop updating, but maybe keep drawing one last frame
+            }
+        }
+
+    </script>
+</body>
+</html>

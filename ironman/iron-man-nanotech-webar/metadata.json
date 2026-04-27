@@ -1,0 +1,7 @@
+{
+  "name": "Iron Man Nanotech WebAR",
+  "description": "A WebAR experience overlaying a nanotech suit on the user's upper body using MediaPipe and Three.js particles.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

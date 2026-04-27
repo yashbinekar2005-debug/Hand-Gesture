@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stark Mark-85: Nanotech Cinematic</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+        #container { position: relative; width: 100vw; height: 100vh; }
+        video { transform: scaleX(-1); position: absolute; width: 100%; height: 100%; object-fit: cover; }
+        canvas { position: absolute; top: 0; left: 0; z-index: 10; pointer-events: none; }
+        
+        /* Cinematic HUD */
+        .hud {
+            position: absolute; top: 20px; left: 20px; z-index: 100;
+            color: #00d2ff; text-transform: uppercase; letter-spacing: 3px;
+            font-weight: bold; text-shadow: 0 0 15px #00d2ff;
+        }
+        .bar-container { width: 300px; height: 4px; background: rgba(0, 40, 60, 0.5); border: 1px solid #00d2ff; margin: 10px 0; }
+        .fill { height: 100%; width: 0%; background: #00d2ff; transition: width 0.1s; box-shadow: 0 0 20px #00d2ff; }
+        #deploy-bar { background: #ff3300; box-shadow: 0 0 20px #ff3300; }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <video id="input_video"></video>
+    <div class="hud">
+        <div id="status">Biometric Calibration...</div>
+        <div class="bar-container"><div id="scan-bar" class="fill"></div></div>
+        <div id="deploy-label" style="opacity:0">Nanotech Deployment</div>
+        <div class="bar-container" style="opacity:0" id="deploy-cont"><div id="deploy-bar" class="fill"></div></div>
+    </div>
+</div>
+
+<script>
+let scene, camera, renderer, armor = {};
+let poseResults = null;
+let suitState = "SCANNING"; // SCANNING, READY, DEPLOYING, ACTIVE
+let deployProgress = 0;
+let bodyScale = 1;
+
+// MARK 85 CINEMATIC COLORS
+const CRIMSON = 0x8b0000;
+const GOLD = 0xd4af37;
+const CYAN_GLOW = 0x00ffff;
+
+function initThree() {
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.z = 5;
+
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ReinhardToneMapping;
+    document.getElementById('container').appendChild(renderer.domElement);
+
+    // Studio Lighting
+    const sun = new THREE.DirectionalLight(0xffffff, 2);
+    sun.position.set(5, 5, 5);
+    scene.add(sun);
+    const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambient);
+
+    buildCinematicSuit();
+    animate();
+}
+
+function buildCinematicSuit() {
+    // Physical Metallic Materials
+    const redMat = new THREE.MeshStandardMaterial({ color: CRIMSON, metalness: 1, roughness: 0.15, transparent: true, opacity: 0 });
+    const goldMat = new THREE.MeshStandardMaterial({ color: GOLD, metalness: 1, roughness: 0.1, transparent: true, opacity: 0 });
+    const glowMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 });
+
+    // 1. CHEST (Anatomical)
+    armor.chest = new THREE.Mesh(new THREE.BoxGeometry(1, 1.2, 0.5), redMat);
+    
+    // Triangular Arc Reactor
+    const triangleShape = new THREE.Shape();
+    triangleShape.moveTo(0, 0.15);
+    triangleShape.lineTo(0.15, -0.1);
+    triangleShape.lineTo(-0.15, -0.1);
+    const reactor = new THREE.Mesh(new THREE.ShapeGeometry(triangleShape), glowMat);
+    reactor.position.set(0, 0.2, 0.26);
+    armor.chest.add(reactor);
+
+    // 2. HELMET (Mark 85 Shape)
+    armor.helmet = new THREE.Group();
+    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.4, 32, 32), redMat);
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.55, 0.15), goldMat);
+    plate.position.set(0, -0.05, 0.3);
+    
+    // LED Eye nodes
+    const eye = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 0.02), glowMat);
+    eye.position.set(-0.1, 0, 0.38);
+    const eye2 = eye.clone(); eye2.position.x = 0.1;
+    armor.helmet.add(skull, plate, eye, eye2);
+
+    // 3. ARMS (Muscular Segments)
+    armor.lUpper = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.14, 1), redMat);
+    armor.lLower = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.08, 1), goldMat);
+    armor.rUpper = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.14, 1), redMat);
+    armor.rLower = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.08, 1), goldMat);
+
+    Object.values(armor).forEach(part => { if(part.isMesh || part.type === "Group") scene.add(part); });
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    if (poseResults && poseResults.poseLandmarks) {
+        updateMapping(poseResults.poseLandmarks);
+    }
+    renderer.render(scene, camera);
+}
+
+function updateMapping(lm) {
+    const v = (id) => lm[id].visibility > 0.6;
+    
+    // --- ADAPTIVE SCALING LOGIC (Priority System) ---
+    let currentHeight = bodyScale;
+    if (v(0) && v(27)) { // Priority 1: Head to Toe
+        currentHeight = Math.abs(lm[0].y - lm[27].y) * 1.5;
+    } else if (v(11) && v(23)) { // Priority 2: Shoulder to Hip
+        currentHeight = Math.abs(lm[11].y - lm[23].y) * 2.8;
+    } else if (v(11) && v(12)) { // Priority 3: Shoulder Width
+        currentHeight = Math.abs(lm[11].x - lm[12].x) * 4.5;
+    }
+    bodyScale = THREE.MathUtils.lerp(bodyScale, currentHeight, 0.1);
+
+    // World Conversion
+    const toWorld = (p) => ({ x: (0.5 - p.x) * 6, y: (0.5 - p.y) * 6, z: -p.z * 2 });
+
+    // Placement
+    if (v(0)) {
+        const head = toWorld(lm[0]);
+        armor.helmet.position.set(head.x, head.y + 0.1, head.z);
+        armor.helmet.scale.set(bodyScale * 0.5, bodyScale * 0.5, bodyScale * 0.5);
+    }
+
+    if (v(11) && v(12)) {
+        const cL = toWorld(lm[11]), cR = toWorld(lm[12]);
+        armor.chest.position.set((cL.x + cR.x)/2, (cL.y + cR.y)/2 - 0.4, (cL.z + cR.z)/2);
+        armor.chest.scale.set(Math.abs(cL.x - cR.x) * 1.8, bodyScale * 0.6, 1);
+    }
+
+    mapLimb(armor.lUpper, lm[11], lm[13], v(11) && v(13));
+    mapLimb(armor.lLower, lm[13], lm[15], v(13) && v(15));
+    mapLimb(armor.rUpper, lm[12], lm[14], v(12) && v(14));
+    mapLimb(armor.rLower, lm[14], lm[16], v(14) && v(16));
+
+    // Gesture Triggers
+    const wristR = lm[16];
+    const chest = { x: (lm[11].x + lm[12].x)/2, y: (lm[11].y + lm[12].y)/2 };
+    const dist = Math.hypot(wristR.x - chest.x, wristR.y - chest.y);
+
+    if (suitState === "SCANNING") {
+        let bar = document.getElementById('scan-bar');
+        let p = parseFloat(bar.style.width) || 0;
+        bar.style.width = (p + 0.4) + "%";
+        if (p >= 100) {
+            suitState = "READY";
+            document.getElementById('status').innerText = "Pilot Recognized. Tap Chest.";
+        }
+    }
+
+    if (dist < 0.1 && suitState === "READY") {
+        suitState = "DEPLOYING";
+        document.getElementById('deploy-label').style.opacity = 1;
+        document.getElementById('deploy-cont').style.opacity = 1;
+    }
+
+    updateSuitAnimation();
+}
+
+function mapLimb(mesh, start, end, visible) {
+    if (!visible) { mesh.visible = false; return; }
+    mesh.visible = true;
+    const pS = new THREE.Vector3((0.5 - start.x)*6, (0.5 - start.y)*6, -start.z*2);
+    const pE = new THREE.Vector3((0.5 - end.x)*6, (0.5 - end.y)*6, -end.z*2);
+    const dir = new THREE.Vector3().subVectors(pE, pS);
+    mesh.scale.set(bodyScale*0.2, dir.length(), bodyScale*0.2);
+    mesh.position.copy(pS).add(dir.clone().multiplyScalar(0.5));
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.clone().normalize());
+}
+
+function updateSuitAnimation() {
+    if (suitState === "DEPLOYING") {
+        deployProgress += 0.8;
+        document.getElementById('status').innerText = "Nanotech Assembly: Mark 85";
+        if (deployProgress >= 100) suitState = "ACTIVE";
+    }
+    document.getElementById('deploy-bar').style.width = deployProgress + "%";
+
+    const p = deployProgress / 100;
+    Object.values(armor).forEach(part => {
+        part.traverse(child => {
+            if (child.isMesh) {
+                child.material.opacity = p;
+                // Add metallic sheen during deployment
+                if (p > 0.5) child.material.roughness = THREE.MathUtils.lerp(0.8, 0.15, p);
+            }
+        });
+    });
+}
+
+// MediaPipe Setup
+const pose = new Pose({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.6 });
+pose.onResults(res => { poseResults = res; });
+
+new Camera(document.getElementById('input_video'), {
+    onFrame: async () => { await pose.send({image: document.getElementById('input_video')}); },
+    width: 1280, height: 720
+}).start();
+
+initThree();
+window.addEventListener('resize', () => {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+});
+</script>
+</body>
+</html>
